@@ -43,7 +43,7 @@
 
 #define test_check(expected_fds)                                             \
   if(result != CURLE_OK) {                                                   \
-    curl_mfprintf(stderr, "test failed with code: %d\n", result);            \
+    curl_mfprintf(stderr, "test failed with code: %d\n", (int)result);       \
     goto test_cleanup;                                                       \
   }                                                                          \
   else if(fd_count != (expected_fds)) {                                      \
@@ -53,10 +53,10 @@
     goto test_cleanup;                                                       \
   }
 
-#define test_run_check(option, expected_fds)    \
-  do {                                          \
-    result = test_run(URL, option, &fd_count);  \
-    test_check(expected_fds);                   \
+#define test_run_check(option, expected_fds)   \
+  do {                                         \
+    result = test_run(URL, option, &fd_count); \
+    test_check(expected_fds);                  \
   } while(0)
 
 /* ---------------------------------------------------------------- */

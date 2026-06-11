@@ -29,27 +29,23 @@ struct Curl_easy;
 struct connectdata;
 struct Curl_dns_entry;
 struct Curl_addrinfo;
+struct Curl_peer;
 
 CURLcode Curl_cf_dns_add(struct Curl_easy *data,
                          struct connectdata *conn,
                          int sockindex,
+                         struct Curl_peer *peer,
                          uint8_t dns_queries,
-                         uint8_t transport,
-                         struct Curl_dns_entry *dns);
+                         uint8_t transport);
 
 CURLcode Curl_cf_dns_insert_after(struct Curl_cfilter *cf_at,
                                   struct Curl_easy *data,
                                   uint8_t dns_queries,
-                                  const char *hostname,
-                                  uint16_t port,
+                                  struct Curl_peer *peer,
                                   uint8_t transport,
                                   bool complete_resolve);
 
 CURLcode Curl_conn_dns_result(struct connectdata *conn, int sockindex);
-
-/* Returns TRUE if any addressinfo is available via
- * `Curl_conn_dns_get_ai()`. */
-bool Curl_conn_dns_has_any_ai(struct Curl_easy *data, int sockindex);
 
 const struct Curl_addrinfo *Curl_conn_dns_get_ai(struct Curl_easy *data,
                                                  int sockindex,

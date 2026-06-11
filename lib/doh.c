@@ -319,7 +319,7 @@ static CURLcode doh_probe_run(struct Curl_easy *data,
                      sizeof(doh_req->req_body),
                      &doh_req->req_body_len);
   if(d) {
-    failf(data, "Failed to encode DoH packet [%d]", d);
+    failf(data, "Failed to encode DoH packet [%d]", (int)d);
     result = CURLE_OUT_OF_MEMORY;
     goto error;
   }
@@ -418,7 +418,8 @@ static CURLcode doh_probe_run(struct Curl_easy *data,
   }
 
   (void)curl_easy_setopt(doh, CURLOPT_SSL_OPTIONS,
-                         (long)data->set.ssl.primary.ssl_options);
+                         ((long)data->set.ssl.primary.ssl_options &
+                          ~CURLSSLOPT_AUTO_CLIENT_CERT));
 
   doh->state.internal = TRUE;
   doh->master_mid = data->mid; /* master transfer of this one */
@@ -457,14 +458,14 @@ CURLcode Curl_doh(struct Curl_easy *data,
 {
   CURLcode result = CURLE_OK;
   struct doh_probes *dohp = NULL;
-  struct connectdata *conn = data->conn;
   size_t i;
 
-  DEBUGASSERT(conn);
   DEBUGASSERT(!async->doh);
   DEBUGASSERT(async->hostname[0]);
-  if(async->doh)
+  if(async->doh) {
+    DEBUGASSERT(0); /* should not happen */
     Curl_doh_cleanup(data, async);
+  }
 
   /* start clean, consider allocating this struct on demand */
   async->doh = dohp = curlx_calloc(1, sizeof(struct doh_probes));
@@ -476,7 +477,6 @@ CURLcode Curl_doh(struct Curl_easy *data,
     curlx_dyn_init(&dohp->probe_resp[i].body, DYN_DOH_RESPONSE);
   }
 
-  conn->bits.doh = TRUE;
   dohp->host = async->hostname;
   dohp->port = async->port;
   /* We are making sub easy handles and want to be called back when
@@ -861,7 +861,7 @@ UNITTEST DOHcode doh_resp_decode(const unsigned char *doh,
   if(index != dohlen)
     return DOH_DNS_MALFORMAT; /* something is wrong */
 
-#ifdef USE_HTTTPS
+#ifdef USE_HTTPSRR
   if((type != CURL_DNS_TYPE_NS) && !d->numcname && !d->numaddr &&
      !d->numhttps_rrs)
 #else
@@ -1231,8 +1231,8 @@ CURLcode Curl_doh_take_result(struct Curl_easy *data,
   if(dohp->probe_resp[DOH_SLOT_IPV4].probe_mid == UINT32_MAX &&
      dohp->probe_resp[DOH_SLOT_IPV6].probe_mid == UINT32_MAX) {
     failf(data, "Could not DoH-resolve: %s", dohp->host);
-    return CONN_IS_PROXIED(data->conn) ? CURLE_COULDNT_RESOLVE_PROXY :
-      CURLE_COULDNT_RESOLVE_HOST;
+    return async->for_proxy ?
+      CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST;
   }
   else if(!dohp->pending) {
     DOHcode rc[DOH_SLOT_COUNT];
@@ -1302,8 +1302,8 @@ CURLcode Curl_doh_take_result(struct Curl_easy *data,
       *pdns = dns;
     } /* address processing done */
     else {
-      result = CONN_IS_PROXIED(data->conn) ? CURLE_COULDNT_RESOLVE_PROXY :
-        CURLE_COULDNT_RESOLVE_HOST;
+      result = async->for_proxy ?
+        CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST;
     }
 
   } /* !dohp->pending */

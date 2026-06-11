@@ -70,10 +70,12 @@
 #define USE_ALARM_TIMEOUT
 #endif
 
-#define MAX_HOSTCACHE_LEN (255 + 7) /* max FQDN + colon + port number + zero */
+#define RESOLV_FAIL(for_proxy) \
+  ((for_proxy) ? CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST)
 
-#define MAX_DNS_CACHE_SIZE 29999
-
+#define IS_RESOLV_FAIL(result) \
+  (((result) == CURLE_COULDNT_RESOLVE_HOST) || \
+   ((result) == CURLE_COULDNT_RESOLVE_PROXY))
 /*
  * ipv6works() returns TRUE if IPv6 seems to work.
  */
@@ -201,7 +203,7 @@ void Curl_printable_address(const struct Curl_addrinfo *ai, char *buf,
    return address that we can jump back to from inside a signal handler. This
    is not thread-safe stuff. */
 static sigjmp_buf curl_jmpenv;
-static curl_simple_lock curl_jmpenv_lock;
+static curl_simple_lock curl_jmpenv_lock = CURL_SIMPLE_LOCK_INIT;
 #endif
 
 #ifdef USE_IPV6
@@ -339,6 +341,15 @@ static bool tailmatch(const char *full, size_t flen,
   return curl_strnequal(part, &full[flen - plen], plen);
 }
 
+static CURLcode hostip_resolv_failed(struct Curl_easy *data,
+                                     const char *hostname,
+                                     bool for_proxy)
+{
+  failf(data, "Could not resolve %s: %s",
+        for_proxy ? "proxy" : "host", hostname);
+  return RESOLV_FAIL(for_proxy);
+}
+
 static bool can_resolve_dns_queries(struct Curl_easy *data,
                                     uint8_t dns_queries)
 {
@@ -368,11 +379,13 @@ CURLcode Curl_resolv_announce_start(struct Curl_easy *data,
 }
 
 #ifdef USE_CURL_ASYNC
+
 static struct Curl_resolv_async *hostip_async_new(struct Curl_easy *data,
                                                   uint8_t dns_queries,
                                                   const char *hostname,
                                                   uint16_t port,
                                                   uint8_t transport,
+                                                  bool for_proxy,
                                                   timediff_t timeout_ms)
 {
   struct Curl_resolv_async *async;
@@ -401,6 +414,7 @@ static struct Curl_resolv_async *hostip_async_new(struct Curl_easy *data,
   async->dns_queries = dns_queries;
   async->port = port;
   async->transport = transport;
+  async->for_proxy = for_proxy;
   async->start = *Curl_pgrs_now(data);
   async->timeout_ms = timeout_ms;
   if(hostlen) {
@@ -424,29 +438,55 @@ static CURLcode hostip_resolv_take_result(struct Curl_easy *data,
     return CURLE_FAILED_INIT;
 
 #ifndef CURL_DISABLE_DOH
-  if(data->conn->bits.doh)
+  if(async->doh)
     result = Curl_doh_take_result(data, async, pdns);
   else
 #endif
   result = Curl_async_take_result(data, async, pdns);
 
   if(result == CURLE_AGAIN) {
-    CURL_TRC_DNS(data, "result incomplete, queries=%s, responses=%s, "
-                 "ongoing=%d", Curl_resolv_query_str(async->dns_queries),
+    CURL_TRC_DNS(data, "resolve incomplete, queries=%s, responses=%s, "
+                 "ongoing=%d for %s:%d",
+                 Curl_resolv_query_str(async->dns_queries),
                  Curl_resolv_query_str(async->dns_responses),
-                 async->queries_ongoing);
+                 async->queries_ongoing, async->hostname, async->port);
     result = CURLE_OK;
   }
   else if(result) {
-    CURL_TRC_DNS(data, "result error %d", result);
-    Curl_resolver_error(data, NULL);
+    result = Curl_async_failed(data, async, NULL);
   }
   else {
-    CURL_TRC_DNS(data, "result complete");
+    CURL_TRC_DNS(data, "resolve complete for %s:%u",
+                 async->hostname, async->port);
     DEBUGASSERT(*pdns);
   }
 
   return result;
+}
+
+timediff_t Curl_resolv_elapsed_ms(struct Curl_easy *data,
+                                  uint32_t resolv_id)
+{
+  struct Curl_resolv_async *async = Curl_async_get(data, resolv_id);
+  if(!async)
+    return CURL_TIMEOUT_RESOLVE_MS;
+  return curlx_ptimediff_ms(Curl_pgrs_now(data), &async->start);
+}
+
+bool Curl_resolv_has_answers(struct Curl_easy *data,
+                             uint32_t resolv_id, uint8_t dns_queries)
+{
+  struct Curl_resolv_async *async = Curl_async_get(data, resolv_id);
+  uint8_t check_queries;
+  /* a no longer existing/running resolve has all answers. */
+  if(!async || async->done)
+    return TRUE;
+  /* Relevant are only queries undertaken. Others are considered answered. */
+  check_queries = (dns_queries & async->dns_queries);
+  if((check_queries & async->dns_responses) != check_queries) {
+    return FALSE;
+  }
+  return TRUE;
 }
 
 const struct Curl_addrinfo *Curl_resolv_get_ai(struct Curl_easy *data,
@@ -454,54 +494,36 @@ const struct Curl_addrinfo *Curl_resolv_get_ai(struct Curl_easy *data,
                                                int ai_family,
                                                unsigned int index)
 {
-#ifdef CURLRES_ASYNCH
   struct Curl_resolv_async *async = Curl_async_get(data, resolv_id);
-  if(async) {
-    if((ai_family == AF_INET) && !(async->dns_queries & CURL_DNSQ_A))
-      return NULL;
-#ifdef USE_IPV6
-    if((ai_family == AF_INET6) && !(async->dns_queries & CURL_DNSQ_AAAA))
-      return NULL;
-#endif
-    return Curl_async_get_ai(data, async, ai_family, index);
-  }
-#else
-  (void)data;
-  (void)resolv_id;
-  (void)ai_family;
   (void)index;
+  if(!async)
+    return NULL;
+  if((ai_family == AF_INET) && !(async->dns_queries & CURL_DNSQ_A))
+    return NULL;
+#ifdef USE_IPV6
+  if((ai_family == AF_INET6) && !(async->dns_queries & CURL_DNSQ_AAAA))
+    return NULL;
 #endif
-  return NULL;
+  return Curl_async_get_ai(data, async, ai_family, index);
 }
 
 #ifdef USE_HTTPSRR
 const struct Curl_https_rrinfo *
 Curl_resolv_get_https(struct Curl_easy *data, uint32_t resolv_id)
 {
-#ifdef CURLRES_ASYNCH
   struct Curl_resolv_async *async = Curl_async_get(data, resolv_id);
-  if(async)
-    return Curl_async_get_https(data, async);
-#else
-  (void)data;
-  (void)resolv_id;
-#endif
-  return NULL;
+  if(!async)
+    return NULL;
+  return Curl_async_get_https(data, async);
 }
 
 bool Curl_resolv_knows_https(struct Curl_easy *data, uint32_t resolv_id)
 {
-#ifdef CURLRES_ASYNCH
   struct Curl_resolv_async *async = Curl_async_get(data, resolv_id);
-  if(async)
-    return Curl_async_knows_https(data, async);
-#else
-  (void)data;
-  (void)resolv_id;
-#endif
-  return TRUE;
+  if(!async)
+    return TRUE;
+  return Curl_async_knows_https(data, async);
 }
-
 #endif /* USE_HTTPSRR */
 
 #endif /* USE_CURL_ASYNC */
@@ -511,6 +533,7 @@ static CURLcode hostip_resolv_start(struct Curl_easy *data,
                                     const char *hostname,
                                     uint16_t port,
                                     uint8_t transport,
+                                    bool for_proxy,
                                     timediff_t timeout_ms,
                                     bool allowDOH,
                                     uint32_t *presolv_id,
@@ -562,7 +585,7 @@ static CURLcode hostip_resolv_start(struct Curl_easy *data,
       goto out;
     if(!async) {
       async = hostip_async_new(data, dns_queries, hostname, port,
-                               transport, timeout_ms);
+                               transport, for_proxy, timeout_ms);
       if(!async) {
         result = CURLE_OUT_OF_MEMORY;
         goto out;
@@ -577,7 +600,7 @@ static CURLcode hostip_resolv_start(struct Curl_easy *data,
 
   /* Can we provide the requested IP specifics in resolving? */
   if(!can_resolve_dns_queries(data, dns_queries)) {
-    result = CURLE_COULDNT_RESOLVE_HOST;
+    result = RESOLV_FAIL(for_proxy);
     goto out;
   }
 
@@ -585,7 +608,7 @@ static CURLcode hostip_resolv_start(struct Curl_easy *data,
   (void)addr;
   if(!async) {
     async = hostip_async_new(data, dns_queries, hostname, port,
-                             transport, timeout_ms);
+                             transport, for_proxy, timeout_ms);
     if(!async) {
       result = CURLE_OUT_OF_MEMORY;
       goto out;
@@ -606,7 +629,7 @@ static CURLcode hostip_resolv_start(struct Curl_easy *data,
     goto out;
   addr = Curl_sync_getaddrinfo(data, dns_queries, hostname, port, transport);
   if(!addr)
-    result = CURLE_COULDNT_RESOLVE_HOST;
+    result = RESOLV_FAIL(for_proxy);
 #endif
 
 out:
@@ -646,22 +669,21 @@ static CURLcode hostip_resolv(struct Curl_easy *data,
                               const char *hostname,
                               uint16_t port,
                               uint8_t transport,
+                              bool for_proxy,
                               timediff_t timeout_ms,
                               bool allowDOH,
                               uint32_t *presolv_id,
                               struct Curl_dns_entry **pdns)
 {
   size_t hostname_len;
-  CURLcode result = CURLE_COULDNT_RESOLVE_HOST;
+  CURLcode result = RESOLV_FAIL(for_proxy);
   bool cache_dns = FALSE;
 
   (void)timeout_ms; /* not used in all ifdefs */
   *presolv_id = 0;
   *pdns = NULL;
 
-#ifndef CURL_DISABLE_DOH
-  data->conn->bits.doh = FALSE; /* default is not */
-#else
+#ifdef CURL_DISABLE_DOH
   (void)allowDOH;
 #endif
 
@@ -681,7 +703,7 @@ static CURLcode hostip_resolv(struct Curl_easy *data,
   if((CURL_DNSQ_IP(dns_queries) == CURL_DNSQ_AAAA) &&
      getenv("CURL_DBG_RESOLV_FAIL_IPV6")) {
     infof(data, "DEBUG fail ipv6 resolve");
-    result = Curl_resolver_error(data, NULL);
+    result = hostip_resolv_failed(data, hostname, for_proxy);
     goto out;
   }
 #endif
@@ -693,27 +715,26 @@ static CURLcode hostip_resolv(struct Curl_easy *data,
   }
   else if(result) {
     infof(data, "Negative DNS entry");
-    result = Curl_resolver_error(data, NULL);
+    result = hostip_resolv_failed(data, hostname, for_proxy);
   }
   else {
     /* No luck, we need to start resolving. */
     cache_dns = TRUE;
     result = hostip_resolv_start(data, dns_queries, hostname, port,
-                                 transport, timeout_ms, allowDOH,
+                                 transport, for_proxy, timeout_ms, allowDOH,
                                  presolv_id, pdns);
   }
 
 out:
   if(result && (result != CURLE_AGAIN)) {
     Curl_dns_entry_unlink(data, pdns);
-    if((result == CURLE_COULDNT_RESOLVE_HOST) ||
-       (result == CURLE_COULDNT_RESOLVE_PROXY)) {
+    if(IS_RESOLV_FAIL(result)) {
       if(cache_dns)
         Curl_dnscache_add_negative(data, dns_queries, hostname, port);
       failf(data, "Could not resolve: %s:%u", hostname, port);
     }
     else {
-      failf(data, "Error %d resolving %s:%u", result, hostname, port);
+      failf(data, "Error %d resolving %s:%u", (int)result, hostname, port);
     }
   }
   else if(cache_dns && *pdns) {
@@ -738,7 +759,7 @@ CURLcode Curl_resolv_blocking(struct Curl_easy *data,
   *pdns = NULL;
   /* We cannot do a blocking resolve using DoH currently */
   result = hostip_resolv(data, dns_queries,
-                         hostname, port, transport, 0, FALSE,
+                         hostname, port, transport, FALSE, 0, FALSE,
                          &resolv_id, pdns);
   switch(result) {
   case CURLE_OK:
@@ -768,15 +789,13 @@ CURL_NORETURN static void alarmfunc(int sig)
   (void)sig;
   siglongjmp(curl_jmpenv, 1);
 }
-#endif /* USE_ALARM_TIMEOUT */
-
-#ifdef USE_ALARM_TIMEOUT
 
 static CURLcode resolv_alarm_timeout(struct Curl_easy *data,
                                      uint8_t dns_queries,
                                      const char *hostname,
                                      uint16_t port,
                                      uint8_t transport,
+                                     bool for_proxy,
                                      timediff_t timeout_ms,
                                      uint32_t *presolv_id,
                                      struct Curl_dns_entry **entry)
@@ -856,7 +875,7 @@ static CURLcode resolv_alarm_timeout(struct Curl_easy *data,
   /* Perform the actual name resolution. This might be interrupted by an
    * alarm if it takes too long. */
   result = hostip_resolv(data, dns_queries, hostname, port, transport,
-                         timeout_ms, FALSE, presolv_id, entry);
+                         for_proxy, timeout_ms, FALSE, presolv_id, entry);
 
 clean_up:
   if(!prev_alarm)
@@ -907,6 +926,33 @@ clean_up:
 
 #endif /* USE_ALARM_TIMEOUT */
 
+#ifdef USE_UNIX_SOCKETS
+static CURLcode resolv_unix(struct Curl_easy *data,
+                            const char *unix_path,
+                            bool abstract_path,
+                            struct Curl_dns_entry **pdns)
+{
+  struct Curl_addrinfo *addr;
+  CURLcode result;
+
+  DEBUGASSERT(unix_path);
+  *pdns = NULL;
+
+  result = Curl_unix2addr(unix_path, abstract_path, &addr);
+  if(result) {
+    if(result == CURLE_TOO_LARGE) {
+      /* Long paths are not supported for now */
+      failf(data, "Unix socket path too long: '%s'", unix_path);
+      result = CURLE_COULDNT_RESOLVE_HOST;
+    }
+    return result;
+  }
+
+  *pdns = Curl_dnscache_mk_entry(data, 0, &addr, NULL, 0);
+  return *pdns ? CURLE_OK : CURLE_OUT_OF_MEMORY;
+}
+#endif /* USE_UNIX_SOCKETS */
+
 /*
  * Curl_resolv() is the main name resolve function within libcurl. It resolves
  * a name and returns a pointer to the entry in the 'entry' argument. This
@@ -925,19 +971,17 @@ clean_up:
  * Return codes:
  * CURLE_OK = success, *pdns set to non-NULL
  * CURLE_AGAIN = resolving in progress, *pdns == NULL
- * CURLE_COULDNT_RESOLVE_HOST = error, *pdns == NULL
- * CURLE_OPERATION_TIMEDOUT = timeout expired, *pdns == NULL
+ * any other CURLcode error, *pdns == NULL
  */
 CURLcode Curl_resolv(struct Curl_easy *data,
+                     struct Curl_peer *peer,
                      uint8_t dns_queries,
-                     const char *hostname,
-                     uint16_t port,
                      uint8_t transport,
+                     bool for_proxy,
                      timediff_t timeout_ms,
                      uint32_t *presolv_id,
                      struct Curl_dns_entry **pdns)
 {
-  DEBUGASSERT(hostname && *hostname);
   *presolv_id = 0;
   *pdns = NULL;
 
@@ -947,14 +991,23 @@ CURLcode Curl_resolv(struct Curl_easy *data,
   else if(!timeout_ms)
     timeout_ms = CURL_TIMEOUT_RESOLVE_MS;
 
+#ifdef USE_UNIX_SOCKETS
+  if(peer->unix_socket)
+    return resolv_unix(data, peer->hostname, (bool)peer->abstract_uds, pdns);
+#else
+  if(peer->unix_socket)
+    return hostip_resolv_failed(data, peer->hostname, for_proxy);
+#endif
+
 #ifdef USE_ALARM_TIMEOUT
   if(timeout_ms && data->set.no_signal) {
     /* Cannot use ALARM when signals are disabled */
     timeout_ms = 0;
   }
   if(timeout_ms && !Curl_doh_wanted(data)) {
-    return resolv_alarm_timeout(data, dns_queries, hostname, port, transport,
-                                timeout_ms, presolv_id, pdns);
+    return resolv_alarm_timeout(data, dns_queries, peer->hostname, peer->port,
+                                transport, for_proxy, timeout_ms, presolv_id,
+                                pdns);
   }
 #endif /* !USE_ALARM_TIMEOUT */
 
@@ -963,8 +1016,9 @@ CURLcode Curl_resolv(struct Curl_easy *data,
     infof(data, "timeout on name lookup is not supported");
 #endif
 
-  return hostip_resolv(data, dns_queries, hostname, port, transport,
-                       timeout_ms, TRUE, presolv_id, pdns);
+  return hostip_resolv(data, dns_queries, peer->hostname, peer->port,
+                       transport, for_proxy, timeout_ms, TRUE, presolv_id,
+                       pdns);
 }
 
 #ifdef USE_CURL_ASYNC
@@ -1001,7 +1055,7 @@ CURLcode Curl_resolv_take_result(struct Curl_easy *data, uint32_t resolv_id,
   }
   else if(result) {
     Curl_async_shutdown(data, async);
-    return Curl_resolver_error(data, NULL);
+    return Curl_async_failed(data, async, NULL);
   }
 
   result = hostip_resolv_take_result(data, async, pdns);
@@ -1012,15 +1066,14 @@ CURLcode Curl_resolv_take_result(struct Curl_easy *data, uint32_t resolv_id,
     if(result)
       Curl_dns_entry_unlink(data, pdns);
   }
-  else if((result == CURLE_COULDNT_RESOLVE_HOST) ||
-          (result == CURLE_COULDNT_RESOLVE_PROXY)) {
+  else if(IS_RESOLV_FAIL(result)) {
     Curl_dnscache_add_negative(data, async->dns_queries,
                                async->hostname, async->port);
     failf(data, "Could not resolve: %s:%u", async->hostname, async->port);
   }
   else if(result) {
     failf(data, "Error %d resolving %s:%u",
-          result, async->hostname, async->port);
+          (int)result, async->hostname, async->port);
   }
   return result;
 }
@@ -1074,56 +1127,3 @@ void Curl_resolv_destroy_all(struct Curl_easy *data)
 }
 
 #endif /* USE_CURL_ASYNC */
-
-
-/*
- * Curl_resolver_error() calls failf() with the appropriate message after a
- * resolve error
- */
-CURLcode Curl_resolver_error(struct Curl_easy *data, const char *detail)
-{
-  struct connectdata *conn = data->conn;
-  const char *host_or_proxy = "host";
-  const char *name = conn->host.dispname;
-  CURLcode result = CURLE_COULDNT_RESOLVE_HOST;
-
-#ifndef CURL_DISABLE_PROXY
-  if(conn->bits.proxy) {
-    host_or_proxy = "proxy";
-    result = CURLE_COULDNT_RESOLVE_PROXY;
-    name = conn->socks_proxy.host.name ? conn->socks_proxy.host.dispname :
-      conn->http_proxy.host.dispname;
-  }
-#endif
-
-  failf(data, "Could not resolve %s: %s%s%s%s", host_or_proxy, name,
-        detail ? " (" : "", detail ? detail : "", detail ? ")" : "");
-  return result;
-}
-
-#ifdef USE_UNIX_SOCKETS
-CURLcode Curl_resolv_unix(struct Curl_easy *data,
-                          const char *unix_path,
-                          bool abstract_path,
-                          struct Curl_dns_entry **pdns)
-{
-  struct Curl_addrinfo *addr;
-  CURLcode result;
-
-  DEBUGASSERT(unix_path);
-  *pdns = NULL;
-
-  result = Curl_unix2addr(unix_path, abstract_path, &addr);
-  if(result) {
-    if(result == CURLE_TOO_LARGE) {
-      /* Long paths are not supported for now */
-      failf(data, "Unix socket path too long: '%s'", unix_path);
-      result = CURLE_COULDNT_RESOLVE_HOST;
-    }
-    return result;
-  }
-
-  *pdns = Curl_dnscache_mk_entry(data, 0, &addr, NULL, 0);
-  return *pdns ? CURLE_OK : CURLE_OUT_OF_MEMORY;
-}
-#endif /* USE_UNIX_SOCKETS */

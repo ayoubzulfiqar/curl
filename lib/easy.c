@@ -78,8 +78,8 @@
 #include "easy_lock.h"
 
 /* true globals -- for curl_global_init() and curl_global_cleanup() */
-static unsigned int  initialized;
-static long          easy_init_flags;
+static unsigned int initialized;
+static long easy_init_flags;
 
 #ifdef GLOBAL_INIT_IS_THREADSAFE
 
@@ -942,7 +942,7 @@ static void dupeasy_meta_freeentry(void *p)
   /* Always FALSE. Cannot use a 0 assert here since compilers
    * are not in agreement if they then want a NORETURN attribute or
    * not. *sigh* */
-  DEBUGASSERT(p == NULL);
+  DEBUGASSERT(!p);
 }
 
 /*
@@ -1052,6 +1052,11 @@ CURL *curl_easy_duphandle(CURL *curl)
       (void)Curl_hsts_loadfile(outcurl,
                                outcurl->hsts, outcurl->set.str[STRING_HSTS]);
     (void)Curl_hsts_loadcb(outcurl, outcurl->hsts);
+
+    /* Copy entries learned at runtime. (E.g. Strict-Transport-Security
+       headers.) */
+    if(Curl_hsts_copy(outcurl->hsts, data->hsts))
+      goto fail;
   }
 #endif
 
@@ -1339,6 +1344,8 @@ CURLcode curl_easy_ssls_import(CURL *curl, const char *session_key,
   struct Curl_easy *data = curl;
   if(!GOOD_EASY_HANDLE(data))
     return CURLE_BAD_FUNCTION_ARGUMENT;
+  if(Curl_is_in_callback(data) || Curl_ssl_scache_is_locked(data))
+    return CURLE_RECURSIVE_API_CALL;
   return Curl_ssl_session_import(data, session_key,
                                  shmac, shmac_len, sdata, sdata_len);
 #else
@@ -1360,6 +1367,8 @@ CURLcode curl_easy_ssls_export(CURL *curl,
   struct Curl_easy *data = curl;
   if(!GOOD_EASY_HANDLE(data))
     return CURLE_BAD_FUNCTION_ARGUMENT;
+  if(Curl_is_in_callback(data) || Curl_ssl_scache_is_locked(data))
+    return CURLE_RECURSIVE_API_CALL;
   return Curl_ssl_session_export(data, export_fn, userptr);
 #else
   (void)curl;
