@@ -28,10 +28,9 @@ import logging
 import os
 import time
 from typing import Generator
+
 import pytest
-
-from testenv import Env, CurlClient, Dante
-
+from testenv import CurlClient, Dante, Env
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +49,8 @@ class TestSocks:
     @pytest.fixture(autouse=True, scope='class')
     def _class_scope(self, env, httpd):
         indir = httpd.docs_dir
-        env.make_data_file(indir=indir, fname="data-10m", fsize=10*1024*1024)
-        env.make_data_file(indir=env.gen_dir, fname="data-10m", fsize=10*1024*1024)
+        env.make_data_file(indir=indir, fname="data-10m", fsize=10 * 1024 * 1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-10m", fsize=10 * 1024 * 1024)
 
     @pytest.mark.parametrize("sproto", ['socks4', 'socks5'])
     def test_40_01_socks_http(self, env: Env, sproto, danted: Dante, httpd):
@@ -97,7 +96,9 @@ class TestSocks:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-{count-1}]'
         r = curl.http_upload(urls=[url], data=f'@{fdata}', alpn_proto=proto)
         r.check_stats(count=count, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
+        with open(fdata) as fi:
+            indata = fi.readlines()
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == indata

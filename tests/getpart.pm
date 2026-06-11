@@ -54,21 +54,12 @@ my $trace=0;
 
 # Normalize the part function arguments for proper caching. This includes the
 # filename in the arguments since that is an implied parameter that affects the
-# return value.  Any error messages will only be displayed the first time, but
+# return value.  Any error messages are only displayed the first time, but
 # those are disabled by default anyway, so should never been seen outside
 # development.
 sub normalize_part {
     push @_, $xmlfile;
     return join("\t", @_);
-}
-
-sub decode_hex {
-    my $s = $_;
-    # remove everything not hex
-    $s =~ s/[^A-Fa-f0-9]//g;
-    # encode everything
-    $s =~ s/([a-fA-F0-9][a-fA-F0-9])/chr(hex($1))/eg;
-    return $s;
 }
 
 sub testcaseattr {
@@ -134,7 +125,6 @@ sub getpart {
 
     my @this;
     my $inside=0;
-    my $hex=0;
     my $line;
 
     for(@xml) {
@@ -145,10 +135,6 @@ sub getpart {
         elsif(($inside >= 1) && ($_ =~ /^ *\<$part[ \>]/)) {
             if($inside > 1) {
                 push @this, $_;
-            }
-            elsif($_ =~ /$part [^>]*hex=/) {
-                # attempt to detect a hex-encoded part
-                $hex=1;
             }
             $inside++;
         }
@@ -168,13 +154,6 @@ sub getpart {
             }
             if($warning && !@this) {
                 print STDERR "*** getpart.pm: $section/$part returned empty!\n";
-            }
-            if($hex) {
-                # decode the whole array before returning it!
-                for(@this) {
-                    my $decoded = decode_hex($_);
-                    $_ = $decoded;
-                }
             }
             return @this;
         }
@@ -216,7 +195,7 @@ sub partexists {
 }
 
 # The code currently never calls this more than once per part per file, so
-# caching a result that will never be used again just slows things down.
+# caching a result that is never used again only slows things down.
 # memoize('partexists', NORMALIZER => 'normalize_part');  # cache each result
 
 sub loadtest {

@@ -35,7 +35,7 @@ struct test_1666 {
   CURLcode result_exp;
 };
 
-/* the size of the object needs to deduct the null terminator */
+/* the size of the object needs to deduct the null-terminator */
 #define OID(x) x, sizeof(x) - 1
 
 static bool test1666(const struct test_1666 *spec, size_t i,
@@ -49,7 +49,7 @@ static bool test1666(const struct test_1666 *spec, size_t i,
   result = encodeOID(dbuf, oid, oid + spec->size);
   if(result != spec->result_exp) {
     curl_mfprintf(stderr, "test %zu: expect result %d, got %d\n",
-                  i, spec->result_exp, result);
+                  i, (int)spec->result_exp, (int)result);
     if(!spec->result_exp) {
       curl_mfprintf(stderr, "test %zu: expected output '%s'\n",
                     i, spec->dotted);
@@ -146,7 +146,7 @@ static CURLcode test_unit1666(const char *arg)
           "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
           "\x01\x01\x01\x01\x01\x01\x01\x01"),
       "", CURLE_TOO_LARGE },
-    /* one byte shorter than the previous is just below the limit: */
+    /* one byte shorter than the previous is below the limit: */
     { OID("\x2b\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
           "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
           "\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01"
@@ -168,15 +168,15 @@ static CURLcode test_unit1666(const char *arg)
   struct dynbuf dbuf;
   bool all_ok = TRUE;
 
-  /* the real code uses CURL_X509_STR_MAX for maximum size, but we set a
-     smaller one here so that we can test running into the limit a little
-     easier */
-  curlx_dyn_init(&dbuf, 100);
-
   if(curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
     curl_mfprintf(stderr, "curl_global_init() failed\n");
     return TEST_ERR_MAJOR_BAD;
   }
+
+  /* the real code uses CURL_X509_STR_MAX for maximum size, but we set a
+     smaller one here so that we can test running into the limit a little
+     easier */
+  curlx_dyn_init(&dbuf, 100);
 
   for(i = 0; i < CURL_ARRAYSIZE(test_specs); ++i) {
     if(!test1666(&test_specs[i], i, &dbuf))
@@ -189,8 +189,6 @@ static CURLcode test_unit1666(const char *arg)
 
   UNITTEST_END_SIMPLE
 }
-
-#undef OID
 
 #else
 

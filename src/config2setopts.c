@@ -519,7 +519,7 @@ static CURLcode cookie_setopts(struct OperationConfig *config, CURL *curl)
                                 ISBLANK(cl->data[0]) ? "" : " ", cl->data);
       if(result) {
         warnf("skipped provided cookie, the cookie header "
-              "would go over %u bytes", MAX_COOKIE_LINE);
+              "would go over %d bytes", MAX_COOKIE_LINE);
         return result;
       }
     }
@@ -855,16 +855,17 @@ CURLcode config2setopts(struct OperationConfig *config,
   if(result)
     return result;
 
-#ifndef DEBUGBUILD
-  /* On most modern OSes, exiting works thoroughly,
-     we clean everything up via exit(), so do not bother with slow
-     cleanups. Crappy ones might need to skip this.
-     Note: avoid having this setopt added to the --libcurl source
-     output. */
-  result = curl_easy_setopt(curl, CURLOPT_QUICK_EXIT, 1L);
-  if(result)
-    return result;
+  if(TRUE
+#ifdef DEBUGBUILD
+    && getenv("CURL_QUICK_EXIT")
 #endif
+    ) {
+    /* QUICK_EXIT allows for running threads to be detached and not
+     * joined. Preferably in non-debug runs. */
+    result = curl_easy_setopt(curl, CURLOPT_QUICK_EXIT, 1L);
+    if(result)
+      return result;
+  }
 
   gen_trace_setopts(config, curl);
 
@@ -950,6 +951,13 @@ CURLcode config2setopts(struct OperationConfig *config,
       result = ssl_setopts(config, curl);
     if(setopt_bad(result))
       return result;
+#ifdef DEBUGBUILD
+    if(!per->urlnum) {
+      char *env = getenv("CURL_DBG_NO_USE_SSL_ON_FIRST");
+      if(env)
+        my_setopt_enum(curl, CURLOPT_USE_SSL, CURLUSESSL_NONE);
+    }
+#endif
   }
 
   if(config->path_as_is)

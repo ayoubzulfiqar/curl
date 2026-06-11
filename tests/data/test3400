@@ -3,17 +3,17 @@
 <info>
 <keywords>
 unittest
-CURLOPT_RESOLVE
+capsule
 </keywords>
 </info>
 
-# Client-side
 <client>
 <features>
 unittest
 </features>
 <name>
-CURLOPT_RESOLVE parsing
+capsule protocol encode and decode unit tests
 </name>
 </client>
+
 </testcase>

@@ -62,7 +62,7 @@ my @syms;
 my %doc;
 my %rem;
 
-# scanenum runs the preprocessor on curl.h so it will process all enums
+# scanenum runs the preprocessor on curl.h so it processes all enums
 # included by it, which *should* be all headers
 sub scanenum {
     my ($file) = @_;
@@ -81,7 +81,7 @@ sub scanenum {
 
 sub scanheader {
     my ($f)=@_;
-    open my $h, "<", $f;
+    open(my $h, "<", $f);
     while(<$h>) {
         if(/^#define ((LIB|)CURL[A-Za-z0-9_]*)/) {
             push @syms, $1;
@@ -120,7 +120,7 @@ sub checkmanpage {
             my $s = $1;
             # skip two "special" ones
             if($s !~ /(^(CURLE_OBSOLETE|CURLOPT_TEMPLATE))|_$/) {
-                push @manrefs, "$1:$m:$line";
+                push @manrefs, "$s:$m:$line";
             }
         }
         $line++;
@@ -143,7 +143,7 @@ scanallheaders();
 scanman_md_dir("$root/docs/libcurl");
 scanman_md_dir("$root/docs/libcurl/opts");
 
-open my $s, "<", "$root/docs/libcurl/symbols-in-versions";
+open(my $s, "<", "$root/docs/libcurl/symbols-in-versions");
 while(<$s>) {
     if(/(^[^ \n]+) +(.*)/) {
         my ($sym, $rest)=($1, $2);
@@ -165,7 +165,7 @@ close $s;
 
 my $ignored=0;
 for my $e (sort @syms) {
-    # OBSOLETE - names that are just placeholders for a position where we
+    # OBSOLETE - names that are placeholders for a position where we
     # previously had a name, that is now removed. The OBSOLETE names should
     # never be used for anything.
     #
@@ -176,7 +176,7 @@ for my $e (sort @syms) {
     #
     # CURL_TEMP_ - are defined and *undefined* again within the file
     #
-    # *_LAST and *_LASTENTRY are just suffix for the placeholders used for the
+    # *_LAST and *_LASTENTRY are suffix for the placeholders used for the
     # last entry in many enum series.
     #
 

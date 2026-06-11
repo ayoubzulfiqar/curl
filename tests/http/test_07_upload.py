@@ -30,11 +30,10 @@ import logging
 import os
 import re
 import sys
-import pytest
 from typing import List, Union
 
-from testenv import Env, CurlClient, LocalClient, ExecResult
-
+import pytest
+from testenv import CurlClient, Env, ExecResult, LocalClient
 
 log = logging.getLogger(__name__)
 
@@ -43,12 +42,12 @@ class TestUpload:
 
     @pytest.fixture(autouse=True, scope='class')
     def _class_scope(self, env, httpd, nghttpx):
-        env.make_data_file(indir=env.gen_dir, fname="data-10k", fsize=10*1024)
-        env.make_data_file(indir=env.gen_dir, fname="data-63k", fsize=63*1024)
-        env.make_data_file(indir=env.gen_dir, fname="data-64k", fsize=64*1024)
-        env.make_data_file(indir=env.gen_dir, fname="data-100k", fsize=100*1024)
-        env.make_data_file(indir=env.gen_dir, fname="data-1m+", fsize=(1024*1024)+1)
-        env.make_data_file(indir=env.gen_dir, fname="data-10m", fsize=10*1024*1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-10k", fsize=10 * 1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-63k", fsize=63 * 1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-64k", fsize=64 * 1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-100k", fsize=100 * 1024)
+        env.make_data_file(indir=env.gen_dir, fname="data-1m+", fsize=(1024 * 1024) + 1)
+        env.make_data_file(indir=env.gen_dir, fname="data-10m", fsize=10 * 1024 * 1024)
 
     # upload small data, check that this is what was echoed
     @pytest.mark.parametrize("proto", Env.http_protos())
@@ -58,7 +57,8 @@ class TestUpload:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-0]'
         r = curl.http_upload(urls=[url], data=data, alpn_proto=proto)
         r.check_stats(count=1, http_status=200, exitcode=0)
-        respdata = open(curl.response_file(0)).readlines()
+        with open(curl.response_file(0)) as fr:
+            respdata = fr.readlines()
         assert respdata == [data]
 
     # upload large data, check that this is what was echoed
@@ -69,8 +69,9 @@ class TestUpload:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-0]'
         r = curl.http_upload(urls=[url], data=f'@{fdata}', alpn_proto=proto)
         r.check_stats(count=1, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
-        respdata = open(curl.response_file(0)).readlines()
+        with open(fdata) as fi, open(curl.response_file(0)) as fr:
+            indata = fi.readlines()
+            respdata = fr.readlines()
         assert respdata == indata
 
     # upload data sequentially, check that they were echoed
@@ -83,7 +84,8 @@ class TestUpload:
         r = curl.http_upload(urls=[url], data=data, alpn_proto=proto)
         r.check_stats(count=count, http_status=200, exitcode=0)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == [data]
 
     # upload data parallel, check that they were echoed
@@ -98,7 +100,8 @@ class TestUpload:
                              extra_args=['--parallel'])
         r.check_stats(count=count, http_status=200, exitcode=0)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == [data]
 
     # upload large data sequentially, check that this is what was echoed
@@ -110,10 +113,12 @@ class TestUpload:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-{count-1}]'
         r = curl.http_upload(urls=[url], data=f'@{fdata}', alpn_proto=proto)
         r.check_response(count=count, http_status=200)
-        indata = open(fdata).readlines()
+        with open(fdata) as fi:
+            indata = fi.readlines()
         r.check_stats(count=count, http_status=200, exitcode=0)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == indata
 
     # upload very large data sequentially, check that this is what was echoed
@@ -125,9 +130,11 @@ class TestUpload:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-{count-1}]'
         r = curl.http_upload(urls=[url], data=f'@{fdata}', alpn_proto=proto)
         r.check_stats(count=count, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
+        with open(fdata) as fi:
+            indata = fi.readlines()
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == indata
 
     # upload from stdin, issue #14870
@@ -142,13 +149,14 @@ class TestUpload:
         r = curl.http_put(urls=[url], data=indata, alpn_proto=proto)
         r.check_stats(count=count, http_status=200, exitcode=0)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == [f'{len(indata)}']
 
     @pytest.mark.parametrize("proto", Env.http_protos())
     def test_07_15_hx_put(self, env: Env, httpd, nghttpx, proto):
         count = 2
-        upload_size = 128*1024
+        upload_size = 128 * 1024
         url = f'https://localhost:{env.https_port}/curltest/put'
         client = LocalClient(name='cli_hx_upload', env=env)
         if not client.exists():
@@ -162,7 +170,7 @@ class TestUpload:
     @pytest.mark.parametrize("proto", Env.http_protos())
     def test_07_16_hx_put_reuse(self, env: Env, httpd, nghttpx, proto):
         count = 2
-        upload_size = 128*1024
+        upload_size = 128 * 1024
         url = f'https://localhost:{env.https_port}/curltest/put'
         client = LocalClient(name='cli_hx_upload', env=env)
         if not client.exists():
@@ -176,7 +184,7 @@ class TestUpload:
     @pytest.mark.parametrize("proto", Env.http_protos())
     def test_07_17_hx_post_reuse(self, env: Env, httpd, nghttpx, proto):
         count = 2
-        upload_size = 128*1024
+        upload_size = 128 * 1024
         url = f'https://localhost:{env.https_port}/curltest/echo'
         client = LocalClient(name='cli_hx_upload', env=env)
         if not client.exists():
@@ -199,7 +207,8 @@ class TestUpload:
                              extra_args=['--parallel'])
         r.check_stats(count=count, http_status=200, exitcode=0)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == [data]
 
     # upload large data parallel, check that this is what was echoed
@@ -216,10 +225,9 @@ class TestUpload:
         self.check_download(r, count, fdata, curl)
 
     # upload single large data to a URL that fails uploads, causing RESETs
-    # (We used to do this for 20 parallel transfers, but the triggered
-    #  stream resets make nghttpx drop the connection after several, which
-    #  then gives a non-deterministic number of completely failed transfers)
-    @pytest.mark.parametrize("proto", Env.http_mplx_protos())
+    # We used to test h3 as well, but this is unreliable in CI with nghttpx
+    # not reporting a RESET sometimes.
+    @pytest.mark.parametrize("proto", Env.http_h1_h2_protos())
     def test_07_22_upload_fail(self, env: Env, httpd, nghttpx, proto):
         fdata = os.path.join(env.gen_dir, 'data-10m')
         count = 1
@@ -245,7 +253,8 @@ class TestUpload:
         exp_data = [f'{os.path.getsize(fdata)}']
         r.check_response(count=count, http_status=200)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == exp_data
 
     # PUT 10m
@@ -261,7 +270,8 @@ class TestUpload:
         exp_data = [f'{os.path.getsize(fdata)}']
         r.check_response(count=count, http_status=200)
         for i in range(count):
-            respdata = open(curl.response_file(i)).readlines()
+            with open(curl.response_file(i)) as fr:
+                respdata = fr.readlines()
             assert respdata == exp_data
 
     # issue #10591
@@ -353,8 +363,9 @@ class TestUpload:
         r.check_response(count=1, http_status=200)
         # apache does not Upgrade on request with a body
         assert r.stats[0]['http_version'] == '1.1', f'{r}'
-        indata = open(fdata).readlines()
-        respdata = open(curl.response_file(0)).readlines()
+        with open(fdata) as fi, open(curl.response_file(0)) as fr:
+            indata = fi.readlines()
+            respdata = fr.readlines()
         assert respdata == indata
 
     # upload to a 301,302,303 response
@@ -370,7 +381,8 @@ class TestUpload:
             '-L', '--trace-config', 'http/2,http/3'
         ])
         r.check_response(count=1, http_status=200)
-        respdata = open(curl.response_file(0)).readlines()
+        with open(curl.response_file(0)) as fr:
+            respdata = fr.readlines()
         assert respdata == []  # was transformed to a GET
 
     # upload to a 307 response
@@ -385,7 +397,8 @@ class TestUpload:
             '-L', '--trace-config', 'http/2,http/3'
         ])
         r.check_response(count=1, http_status=200)
-        respdata = open(curl.response_file(0)).readlines()
+        with open(curl.response_file(0)) as fr:
+            respdata = fr.readlines()
         assert respdata == [data]  # was POST again
 
     # POST form data, yet another code path in transfer
@@ -408,8 +421,9 @@ class TestUpload:
             '--trace-config', 'http/2,http/3'
         ])
         r.check_stats(count=1, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
-        respdata = open(curl.response_file(0)).readlines()
+        with open(fdata) as fi, open(curl.response_file(0)) as fr:
+            indata = fi.readlines()
+            respdata = fr.readlines()
         assert respdata == indata
 
     # POST data urlencoded, large enough to be sent separate from request headers
@@ -422,8 +436,9 @@ class TestUpload:
             '--trace-config', 'http/2,http/3'
         ])
         r.check_stats(count=1, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
-        respdata = open(curl.response_file(0)).readlines()
+        with open(fdata) as fi, open(curl.response_file(0)) as fr:
+            indata = fi.readlines()
+            respdata = fr.readlines()
         assert respdata == indata
 
     # POST data urlencoded, small enough to be sent with request headers
@@ -444,8 +459,9 @@ class TestUpload:
         url = f'https://{env.authority_for(env.domain1, proto)}/curltest/echo?id=[0-0]'
         r = curl.http_upload(urls=[url], data=f'@{fdata}', alpn_proto=proto, extra_args=extra_args)
         r.check_stats(count=1, http_status=200, exitcode=0)
-        indata = open(fdata).readlines()
-        respdata = open(curl.response_file(0)).readlines()
+        with open(fdata) as fi, open(curl.response_file(0)) as fr:
+            indata = fi.readlines()
+            respdata = fr.readlines()
         assert respdata == indata
 
     def check_download(self, r: ExecResult, count: int, srcfile: Union[str, os.PathLike], curl: CurlClient):
@@ -453,8 +469,10 @@ class TestUpload:
             dfile = curl.download_file(i)
             assert os.path.exists(dfile), f'download {dfile} missing\n{r.dump_logs()}'
             if not filecmp.cmp(srcfile, dfile, shallow=False):
-                diff = "".join(difflib.unified_diff(a=open(srcfile).readlines(),
-                                                    b=open(dfile).readlines(),
+                with open(srcfile) as fa, open(dfile) as fb:
+                    a = fa.readlines()
+                    b = fb.readlines()
+                diff = "".join(difflib.unified_diff(a=a, b=b,
                                                     fromfile=srcfile,
                                                     tofile=dfile,
                                                     n=1))
@@ -521,7 +539,7 @@ class TestUpload:
     @pytest.mark.parametrize("httpcode", [301, 302, 307, 308])
     def test_07_44_put_redir(self, env: Env, httpd, nghttpx, proto, httpcode):
         count = 1
-        upload_size = 128*1024
+        upload_size = 128 * 1024
         url = f'https://localhost:{env.https_port}/curltest/put-redir-{httpcode}'
         client = LocalClient(name='cli_hx_upload', env=env)
         if not client.exists():
@@ -641,10 +659,10 @@ class TestUpload:
     @pytest.mark.skipif(condition=not Env.have_nghttpx(), reason="no nghttpx")
     @pytest.mark.parametrize("proto,upload_size", [
         pytest.param('http/1.1', 100, id='h1-small-body'),
-        pytest.param('http/1.1', 10*1024, id='h1-medium-body'),
-        pytest.param('http/1.1', 32*1024, id='h1-limited-body'),
-        pytest.param('h2', 10*1024, id='h2-medium-body'),
-        pytest.param('h2', 32*1024, id='h2-limited-body'),
+        pytest.param('http/1.1', 10 * 1024, id='h1-medium-body'),
+        pytest.param('http/1.1', 32 * 1024, id='h1-limited-body'),
+        pytest.param('h2', 10 * 1024, id='h2-medium-body'),
+        pytest.param('h2', 32 * 1024, id='h2-limited-body'),
         pytest.param('h3', 1024, id='h3-small-body'),
         pytest.param('h3', 1024 * 1024, id='h3-limited-body'),
     ])
@@ -701,8 +719,9 @@ class TestUpload:
             dfile = client.download_file(i)
             assert os.path.exists(dfile), f'download {dfile} missing\n{r.dump_logs()}'
             if complete:
-                diff = "".join(difflib.unified_diff(a=source,
-                                                    b=open(dfile).readlines(),
+                with open(dfile) as fb:
+                    b = fb.readlines()
+                diff = "".join(difflib.unified_diff(a=source, b=b,
                                                     fromfile='-',
                                                     tofile=dfile,
                                                     n=1))

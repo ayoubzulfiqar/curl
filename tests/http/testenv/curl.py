@@ -27,22 +27,21 @@
 import json
 import logging
 import os
-import sys
-import time
-from functools import cmp_to_key
-from threading import Thread
-
-import psutil
 import re
 import shutil
 import subprocess
-from statistics import mean, fmean
-from datetime import timedelta, datetime, timezone
-from typing import List, Optional, Dict, Union, Any
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from functools import cmp_to_key
+from statistics import fmean, mean
+from threading import Thread
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
-from .env import Env
+import psutil
 
+from .env import Env
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +89,7 @@ class RunProfile:
                 'rss': mem.rss,
             })
         except psutil.NoSuchProcess:
+            # process may exit between sampling ticks: ignore this
             pass
 
     def finish(self):
@@ -188,17 +188,18 @@ class RunTcpDump:
         self._stdoutfile = os.path.join(self._run_dir, 'tcpdump.out')
         self._stderrfile = os.path.join(self._run_dir, 'tcpdump.err')
 
-    def get_rsts(self, ports: List[int]|None = None) -> Optional[List[str]]:
+    def get_rsts(self, ports: Optional[List[int]] = None) -> Optional[List[str]]:
         if self._proc:
             raise Exception('tcpdump still running')
         lines = []
-        for line in open(self._stdoutfile):
-            m = re.match(r'.* IP 127\.0\.0\.1\.(\d+) [<>] 127\.0\.0\.1\.(\d+):.*', line)
-            if m:
-                sport = int(m.group(1))
-                dport = int(m.group(2))
-                if ports is None or sport in ports or dport in ports:
-                    lines.append(line)
+        with open(self._stdoutfile) as fd:
+            for line in fd:
+                m = re.match(r'.* IP 127\.0\.0\.1\.(\d+) [<>] 127\.0\.0\.1\.(\d+):.*', line)
+                if m:
+                    sport = int(m.group(1))
+                    dport = int(m.group(2))
+                    if ports is None or sport in ports or dport in ports:
+                        lines.append(line)
         return lines
 
     @property
@@ -209,7 +210,8 @@ class RunTcpDump:
     def stderr(self) -> List[str]:
         if self._proc:
             raise Exception('tcpdump still running')
-        return open(self._stderrfile).readlines()
+        with open(self._stderrfile) as fd:
+            return fd.readlines()
 
     def sample(self):
         # not sure how to make that detection reliable for all platforms
@@ -237,6 +239,7 @@ class RunTcpDump:
                     try:
                         self._proc.wait(timeout=1)
                     except subprocess.TimeoutExpired:
+                        # timeout means tcpdump is still running
                         pass
         except Exception:
             log.exception('Tcpdump')
@@ -281,11 +284,11 @@ class ExecResult:
         if with_stats:
             self._parse_stats()
         else:
-            # noinspection PyBroadException
             try:
                 out = ''.join(self._stdout)
                 self._json_out = json.loads(out)
-            except:  # noqa: E722
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # stdout not guaranteed to be JSON, keep _json_out as None
                 pass
 
     def __repr__(self):
@@ -297,8 +300,7 @@ class ExecResult:
         for line in self._stdout:
             try:
                 self._stats.append(json.loads(line))
-            # TODO: specify specific exceptions here
-            except:  # noqa: E722
+            except (json.JSONDecodeError, TypeError, ValueError):
                 log.exception(f'not a JSON stat: {line}')
                 break
 
@@ -394,7 +396,7 @@ class ExecResult:
                                         f'got {self.exit_code}\n{self.dump_logs()}'
         elif code is False:
             assert self.exit_code != 0, f'expected exit code {code}, '\
-                                                f'got {self.exit_code}\n{self.dump_logs()}'
+                                        f'got {self.exit_code}\n{self.dump_logs()}'
         else:
             assert self.exit_code == code, f'expected exit code {code}, '\
                                            f'got {self.exit_code}\n{self.dump_logs()}'
@@ -541,23 +543,8 @@ class ExecResult:
             ref_tl += ['time_namelookup', 'time_connect']
             if url.startswith('https:'):
                 ref_tl += ['time_appconnect']
-        # what kind of transfer was it?
-        if s['size_upload'] == 0 and s['size_download'] > 0:
-            # this is a download
-            dl_tl = ['time_pretransfer']
-            if s['size_request'] > 0:
-                dl_tl = ['time_posttransfer'] + dl_tl
-            ref_tl += dl_tl
-            # the first byte of the response may arrive before we
-            # track the other times when the client is slow (CI).
-            somewhere_keys.extend(['time_starttransfer'])
-        elif s['size_upload'] > 0 and s['size_download'] == 0:
-            # this is an upload
-            ul_tl = ['time_pretransfer', 'time_posttransfer']
-            ref_tl += ul_tl
-        else:
-            # could be a 0-length upload or 0-length download, not sure
-            exact_match = False
+        ref_tl += ['time_pretransfer', 'time_posttransfer']
+        somewhere_keys.extend(['time_starttransfer'])
         # always there at the end
         ref_tl += ['time_total']
 
@@ -673,34 +660,45 @@ class CurlClient:
 
     def _rmf(self, path):
         if os.path.exists(path):
-            return os.remove(path)
+            os.remove(path)
 
     def _rmrf(self, path):
         if os.path.exists(path):
-            return shutil.rmtree(path)
+            shutil.rmtree(path)
 
     def _mkpath(self, path):
         if not os.path.exists(path):
-            return os.makedirs(path)
+            os.makedirs(path)
 
     def get_proxy_args(self, proto: str = 'http/1.1',
                        proxys: bool = True, tunnel: bool = False,
-                       use_ip: bool = False):
-        proxy_name = self._server_addr if use_ip else self.env.proxy_domain
+                       use_ip: bool = False, use_ipv6: bool = False,
+                       use_h2o: bool = False):
+        proxy_name = '[::1]' if use_ipv6 else \
+            self._server_addr if use_ip else self.env.proxy_domain
         if proxys:
-            pport = self.env.pts_port(proto) if tunnel else self.env.proxys_port
+            if tunnel:
+                pport = self.env.pts_port(proto, use_h2o=use_h2o)
+            elif proto == 'h3':
+                pport = self.env.h3proxys_port
+            else:
+                pport = self.env.proxys_port
             xargs = [
                 '--proxy', f'https://{proxy_name}:{pport}/',
-                '--resolve', f'{proxy_name}:{pport}:{self._server_addr}',
                 '--proxy-cacert', self.env.ca.cert_file,
             ]
+            if self._force_resolv and not use_ip and not use_ipv6:
+                xargs.extend(['--resolve', f'{proxy_name}:{pport}:{self._server_addr}'])
             if proto == 'h2':
                 xargs.append('--proxy-http2')
+            elif proto == 'h3':
+                xargs.append('--proxy-http3')
         else:
             xargs = [
                 '--proxy', f'http://{proxy_name}:{self.env.proxy_port}/',
-                '--resolve', f'{proxy_name}:{self.env.proxy_port}:{self._server_addr}',
             ]
+            if self._force_resolv and not use_ip and not use_ipv6:
+                xargs.extend(['--resolve', f'{proxy_name}:{self.env.proxy_port}:{self._server_addr}'])
         if tunnel:
             xargs.append('--proxytunnel')
         return xargs
@@ -727,7 +725,7 @@ class CurlClient:
                       no_save: bool = False,
                       limit_rate: Optional[str] = None,
                       extra_args: Optional[List[str]] = None,
-                      url_options: Optional[Dict[str,List[str]]] = None):
+                      url_options: Optional[Dict[str, List[str]]] = None):
         if extra_args is None:
             extra_args = []
         if no_save:
@@ -1032,8 +1030,6 @@ class CurlClient:
                                          cwd=self._run_dir, shell=False,
                                          env=self._run_env)
                     profile = RunProfile(p.pid, started_at, self._run_dir)
-                    if intext is not None and False:
-                        p.communicate(input=intext.encode(), timeout=1)
                     if self._with_perf:
                         perf = PerfProfile(p.pid, self._run_dir)
                         perf.start()
@@ -1045,10 +1041,10 @@ class CurlClient:
                         try:
                             p.wait(timeout=ptimeout)
                             break
-                        except subprocess.TimeoutExpired:
+                        except subprocess.TimeoutExpired as e:
                             if end_at and datetime.now() >= end_at:
                                 p.kill()
-                                raise subprocess.TimeoutExpired(cmd=args, timeout=self._timeout)
+                                raise subprocess.TimeoutExpired(cmd=args, timeout=self._timeout) from e
                             profile.sample()
                             ptimeout = 0.01
                     exitcode = p.returncode
@@ -1077,8 +1073,9 @@ class CurlClient:
             dtrace.finish()
         if self._with_flame:
             self._generate_flame(args, dtrace=dtrace, perf=perf)
-        coutput = open(self._stdoutfile).readlines()
-        cerrput = open(self._stderrfile).readlines()
+        with open(self._stdoutfile) as fout, open(self._stderrfile) as ferr:
+            coutput = fout.readlines()
+            cerrput = ferr.readlines()
         return ExecResult(args=args, exit_code=exitcode, exception=exception,
                           stdout=coutput, stderr=cerrput,
                           duration=ended_at - started_at,
@@ -1117,7 +1114,7 @@ class CurlClient:
         else:
             force_resolve = self._force_resolv
 
-        args = [self._curl, "-s", "--path-as-is"]
+        args = [self._curl, "--disable", "-s", "--path-as-is"]
         if 'CURL_TEST_EVENT' in os.environ:
             args.append('--test-event')
 
@@ -1154,7 +1151,7 @@ class CurlClient:
                 pass
             elif insecure:
                 args.append('--insecure')
-            elif active_options and ("--cacert" in active_options or \
+            elif active_options and ("--cacert" in active_options or
                     "--capath" in active_options):
                 pass
             elif u.hostname:
@@ -1172,7 +1169,8 @@ class CurlClient:
         return args
 
     def _parse_headerfile(self, headerfile: str, r: Optional[ExecResult] = None) -> ExecResult:
-        lines = open(headerfile).readlines()
+        with open(headerfile) as fd:
+            lines = fd.readlines()
         if r is None:
             r = ExecResult(args=[], exit_code=0, stdout=[], stderr=[])
 
@@ -1229,7 +1227,7 @@ class CurlClient:
 
     def _perf_collapse(self, perf: PerfProfile, file_err):
         if not os.path.exists(perf.file):
-            raise Exception(f'dtrace output file does not exist: {perf.file}')
+            raise Exception(f'perf output file does not exist: {perf.file}')
         fg_collapse = os.path.join(self._fg_dir, 'stackcollapse-perf.pl')
         if not os.path.exists(fg_collapse):
             raise Exception(f'FlameGraph script not found: {fg_collapse}')

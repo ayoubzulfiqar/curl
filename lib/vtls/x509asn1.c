@@ -198,7 +198,7 @@ static const char *getASN1Element_(struct Curl_asn1Element *elem,
 }
 
 /*
- * unit test @1657
+ * @unittest 1657
  */
 UNITTEST const char *getASN1Element(struct Curl_asn1Element *elem,
                                     const char *beg, const char *end);
@@ -403,7 +403,8 @@ static CURLcode utf8asn1str(struct dynbuf *to, int type, const char *from,
  *
  * @unittest 1666
  */
-UNITTEST CURLcode encodeOID(struct dynbuf *buf, const char *b, const char *e);
+UNITTEST CURLcode encodeOID(struct dynbuf *store,
+                            const char *beg, const char *end);
 UNITTEST CURLcode encodeOID(struct dynbuf *store,
                             const char *beg, const char *end)
 {
@@ -489,7 +490,7 @@ static CURLcode OID2str(struct dynbuf *store,
 }
 
 /*
- * Unit test @1656
+ * @unittest 1656
  */
 UNITTEST CURLcode GTime2str(struct dynbuf *store,
                             const char *beg, const char *end);
@@ -606,7 +607,7 @@ static CURLcode UTime2str(struct dynbuf *store,
   }
 
   tzl = end - tzp;
-  return curlx_dyn_addf(store, "%u%.2s-%.2s-%.2s %.2s:%.2s:%.2s %.*s",
+  return curlx_dyn_addf(store, "%d%.2s-%.2s-%.2s %.2s:%.2s:%.2s %.*s",
                         20 - (*beg >= '5'), beg, beg + 2, beg + 4,
                         beg + 6, beg + 8, sec,
                         (int)tzl, tzp);
@@ -616,6 +617,8 @@ static CURLcode UTime2str(struct dynbuf *store,
  * Convert an ASN.1 element to a printable string.
  *
  * Return error
+ *
+ * @unittest 1667
  */
 UNITTEST CURLcode ASN1tostr(struct dynbuf *store,
                             struct Curl_asn1Element *elem);
@@ -1010,7 +1013,7 @@ static int do_pubkey(struct Curl_easy *data, int certnum, const char *algo,
       return 1;
 
     /* Compute key length. */
-    for(q = elem.beg; !*q && q < elem.end; q++)
+    for(q = elem.beg; q < elem.end && !*q; q++)
       ;
     len = ((elem.end - q) * 8);
     if(len) {
@@ -1059,7 +1062,7 @@ static int do_pubkey(struct Curl_easy *data, int certnum, const char *algo,
     if(p) {
       if(do_pubkey_field(data, certnum, "dh(p)", &elem))
         return 1;
-      if(getASN1Element(&elem, param->beg, param->end)) {
+      if(getASN1Element(&elem, p, param->end)) {
         if(do_pubkey_field(data, certnum, "dh(g)", &elem))
           return 1;
         if(do_pubkey_field(data, certnum, "dh(pub_key)", &pk))
