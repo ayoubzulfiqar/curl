@@ -635,7 +635,7 @@ CURLcode Curl_async_getaddrinfo(struct Curl_easy *data,
 out:
   if(result)
     CURL_TRC_DNS(data, "error queueing query %s:%d -> %d",
-                 async->hostname, async->port, result);
+                 async->hostname, async->port, (int)result);
   return result;
 }
 
@@ -701,6 +701,9 @@ CURLcode Curl_async_take_result(struct Curl_easy *data,
   if(thrdd->rr.channel)
     (void)Curl_ares_perform(thrdd->rr.channel, 0);
 #endif
+#ifndef ENABLE_WAKEUP
+  Curl_async_thrdd_multi_process(data->multi);
+#endif
 
   if(!async->done)
     return CURLE_AGAIN;
@@ -756,7 +759,7 @@ out:
      (result != CURLE_COULDNT_RESOLVE_HOST) &&
      (result != CURLE_COULDNT_RESOLVE_PROXY)) {
     CURL_TRC_DNS(data, "Error %d resolving %s:%d",
-                 result, async->hostname, async->port);
+                 (int)result, async->hostname, async->port);
   }
   return result;
 }

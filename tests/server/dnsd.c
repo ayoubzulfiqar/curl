@@ -159,13 +159,17 @@ static int blob_add_qname(struct blob *b, const struct Curl_str *str)
 #define QTYPE_AAAA  28
 #define QTYPE_HTTPS 0x41
 
+#if 0
 #define HTTPS_RR_CODE_MANDATORY       0x00
+#endif
 #define HTTPS_RR_CODE_ALPN            0x01
 #define HTTPS_RR_CODE_NO_DEF_ALPN     0x02
+#if 0
 #define HTTPS_RR_CODE_PORT            0x03
 #define HTTPS_RR_CODE_IPV4            0x04
 #define HTTPS_RR_CODE_ECH             0x05
 #define HTTPS_RR_CODE_IPV6            0x06
+#endif
 
 static const char *type2string(uint16_t qtype)
 {
@@ -488,7 +492,7 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
       const unsigned char *store = ipv4_pref;
       if(add_answer(&resp->body, store, sizeof(ipv4_pref), QTYPE_A))
         goto error;
-      logmsg("[%d] response A (%x) '%s'", qid, QTYPE_A,
+      logmsg("[%d] response A (%x) '%s'", qid, (unsigned int)QTYPE_A,
              curlx_inet_ntop(AF_INET, store, addrbuf, sizeof(addrbuf)));
     }
     if(!ancount_a)
@@ -499,7 +503,7 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
       const unsigned char *store = ipv6_pref;
       if(add_answer(&resp->body, store, sizeof(ipv6_pref), QTYPE_AAAA))
         goto error;
-      logmsg("[%d] response AAAA (%x) '%s'", qid, QTYPE_AAAA,
+      logmsg("[%d] response AAAA (%x) '%s'", qid, (unsigned int)QTYPE_AAAA,
              curlx_inet_ntop(AF_INET6, store, addrbuf, sizeof(addrbuf)));
     }
     if(!ancount_aaaa)
@@ -512,8 +516,8 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
                httpsrr.dlen);
         goto error;
       }
-      logmsg("[%d] response HTTPS (%x), %zu bytes", qid, QTYPE_HTTPS,
-             httpsrr.dlen);
+      logmsg("[%d] response HTTPS (%x), %zu bytes", qid,
+             (unsigned int)QTYPE_HTTPS, httpsrr.dlen);
     }
     else
       logmsg("[%d] response HTTPS, no record", qid);
@@ -1043,7 +1047,7 @@ dnsd_cleanup:
   }
 
   clear_resp_queue();
-  restore_signal_handlers(true);
+  restore_signal_handlers(TRUE);
 
   if(got_exit_signal) {
     logmsg("========> %s dnsd (port: %d pid: %ld) exits with signal (%d)",

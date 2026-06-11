@@ -113,7 +113,7 @@ static const char *cmdfile = "log/server.cmd";
 #define CMD_AUTH_REQUIRED "auth_required"
 
 /* 'idle' means that it will accept the request fine but never respond
-   any data. Just keep the connection alive. */
+   any data. Keep the connection alive. */
 #define CMD_IDLE "idle"
 
 /* 'stream' means to send a never-ending stream of data */
@@ -195,10 +195,10 @@ static bool socket_domain_is_ip(void)
 #ifdef USE_IPV6
   case AF_INET6:
 #endif
-    return true;
+    return TRUE;
   default:
     /* case AF_UNIX: */
-    return false;
+    return FALSE;
   }
 }
 #endif
@@ -304,7 +304,7 @@ static int sws_parse_servercmd(struct sws_httprequest *req)
       else {
         logmsg("Unknown <servercmd> instruction found: %s", cmd);
       }
-      /* try to deal with CRLF or just LF */
+      /* try to deal with CRLF or LF */
       check = strchr(cmd, '\r');
       if(!check)
         check = strchr(cmd, '\n');
@@ -966,7 +966,7 @@ static int sws_send_doc(curl_socket_t sock, struct sws_httprequest *req)
 
   responsesize = count;
   do {
-    /* Ok, we send no more than N bytes at a time, just to make sure that
+    /* Ok, we send no more than N bytes at a time, to make sure that
        larger chunks are split up so that the client will need to do multiple
        recv() calls to get it and thus we exercise that code better */
     size_t num = count;
@@ -1794,7 +1794,7 @@ http_connect_cleanup:
 static void http_upgrade(struct sws_httprequest *req)
 {
   (void)req;
-  logmsg("Upgraded to ... %u", req->upgrade_request);
+  logmsg("Upgraded to ... %d", (int)req->upgrade_request);
   /* left to implement */
 }
 
@@ -1971,7 +1971,7 @@ static int test_sws(int argc, const char *argv[])
   unsigned short port = 8999;
 #ifdef USE_UNIX_SOCKETS
   const char *unix_socket = NULL;
-  bool unlink_socket = false;
+  bool unlink_socket = FALSE;
 #endif
   struct sws_httprequest *req = NULL;
   int rc = 0;
@@ -2135,7 +2135,7 @@ static int test_sws(int argc, const char *argv[])
            logdir, SERVERLOGS_LOCKDIR, protocol_type,
            is_proxy ? "-proxy" : "", socket_type);
 
-  install_signal_handlers(false);
+  install_signal_handlers(FALSE);
 
   req = calloc(1, sizeof(*req));
   if(!req)
@@ -2271,7 +2271,7 @@ static int test_sws(int argc, const char *argv[])
 
 #ifdef USE_UNIX_SOCKETS
   /* listen succeeds, so let's assume a valid listening Unix socket */
-  unlink_socket = true;
+  unlink_socket = TRUE;
 #endif
 
   /*
@@ -2465,7 +2465,7 @@ sws_cleanup:
     clear_advisor_read_lock(loglockfile);
   }
 
-  restore_signal_handlers(false);
+  restore_signal_handlers(FALSE);
 
   if(got_exit_signal) {
     logmsg("========> %s sws (%s pid: %ld) exits with signal (%d)",
