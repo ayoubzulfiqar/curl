@@ -25,10 +25,12 @@
  ***************************************************************************/
 #include "curl_setup.h"
 
+#include "hostip.h"
 #include "curlx/timeval.h"
 
 struct Curl_dns_entry;
 struct ip_quadruple;
+struct Curl_peer;
 struct Curl_str;
 
 enum alpnid Curl_alpn2alpnid(const unsigned char *name, size_t len);
@@ -37,8 +39,6 @@ enum alpnid Curl_str2alpnid(const struct Curl_str *cstr);
 /* generic function that returns how much time there is left to run, according
    to the timeouts set */
 timediff_t Curl_timeleft_ms(struct Curl_easy *data);
-timediff_t Curl_timeleft_now_ms(struct Curl_easy *data,
-                                const struct curltime *pnow);
 
 #define DEFAULT_CONNECT_TIMEOUT 300000 /* milliseconds == five minutes */
 
@@ -72,9 +72,6 @@ bool Curl_shutdown_started(struct Curl_easy *data, int sockindex);
 curl_socket_t Curl_getconnectinfo(struct Curl_easy *data,
                                   struct connectdata **connp);
 
-bool Curl_addr2string(struct sockaddr *sa, curl_socklen_t salen,
-                      char *addr, uint16_t *port);
-
 /*
  * Curl_conncontrol() marks the end of a connection/stream. The 'ctrl'
  * argument specifies if it is the end of a connection or a stream.
@@ -87,9 +84,9 @@ bool Curl_addr2string(struct sockaddr *sa, curl_socklen_t salen,
  * when the connection will close.
  */
 
-#define CONNCTRL_KEEP 0 /* undo a marked closure */
+#define CONNCTRL_KEEP       0 /* undo a marked closure */
 #define CONNCTRL_CONNECTION 1
-#define CONNCTRL_STREAM 2
+#define CONNCTRL_STREAM     2
 
 void Curl_conncontrol(struct connectdata *conn,
                       int ctrl
@@ -100,12 +97,12 @@ void Curl_conncontrol(struct connectdata *conn,
 
 #if defined(DEBUGBUILD) && defined(CURLVERBOSE)
 #define streamclose(x, y) Curl_conncontrol(x, CONNCTRL_STREAM, y)
-#define connclose(x, y) Curl_conncontrol(x, CONNCTRL_CONNECTION, y)
-#define connkeep(x, y) Curl_conncontrol(x, CONNCTRL_KEEP, y)
+#define connclose(x, y)   Curl_conncontrol(x, CONNCTRL_CONNECTION, y)
+#define connkeep(x, y)    Curl_conncontrol(x, CONNCTRL_KEEP, y)
 #else /* !DEBUGBUILD || !CURLVERBOSE */
 #define streamclose(x, y) Curl_conncontrol(x, CONNCTRL_STREAM)
-#define connclose(x, y) Curl_conncontrol(x, CONNCTRL_CONNECTION)
-#define connkeep(x, y) Curl_conncontrol(x, CONNCTRL_KEEP)
+#define connclose(x, y)   Curl_conncontrol(x, CONNCTRL_CONNECTION)
+#define connkeep(x, y)    Curl_conncontrol(x, CONNCTRL_KEEP)
 #endif
 
 CURLcode Curl_cf_setup_insert_after(struct Curl_cfilter *cf_at,
@@ -116,25 +113,30 @@ CURLcode Curl_cf_setup_insert_after(struct Curl_cfilter *cf_at,
 /**
  * Setup the cfilters at `sockindex` in connection `conn`.
  * If no filter chain is installed yet, inspects the configuration
- * in `data` and `conn? to install a suitable filter chain.
+ * in `data` and `conn` to install a suitable filter chain.
  */
 CURLcode Curl_conn_setup(struct Curl_easy *data,
                          struct connectdata *conn,
                          int sockindex,
-                         struct Curl_dns_entry *dns,
                          int ssl_mode);
 
 /* Set conn to allow multiplexing. */
 void Curl_conn_set_multiplex(struct connectdata *conn);
 
-#ifdef USE_UNIX_SOCKETS
-#ifndef CURL_DISABLE_PROXY
-#define UNIX_SOCKET_PREFIX "localhost"
-#endif
-const char *Curl_conn_get_unix_path(struct connectdata *conn);
-#else
-#define Curl_conn_get_unix_path(c)      NULL
-#endif
+/* Get the origin peer at sockindex. */
+struct Curl_peer *Curl_conn_get_origin(struct connectdata *conn,
+                                       int sockindex);
+
+/* Get the peer the connection actually connects to at sockindex.
+ * Often the same as "origin", but can be redirected via "connect-to"
+ * or "alt-svc". May tunnel through proxies. */
+struct Curl_peer *Curl_conn_get_destination(struct connectdata *conn,
+                                            int sockindex);
+
+/* Get the peer curl connects its socket to.
+ * Can be origin, "connect-to" or the first proxy. */
+struct Curl_peer *Curl_conn_get_first_peer(struct connectdata *conn,
+                                           int sockindex);
 
 extern struct Curl_cftype Curl_cft_setup;
 

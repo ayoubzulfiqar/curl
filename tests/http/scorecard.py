@@ -32,9 +32,18 @@ import os
 import re
 import sys
 from statistics import mean
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
-from testenv import Env, Httpd, CurlClient, Caddy, ExecResult, NghttpxQuic, RunProfile, Dante
+from testenv import (
+    Caddy,
+    CurlClient,
+    Dante,
+    Env,
+    ExecResult,
+    Httpd,
+    NghttpxQuic,
+    RunProfile,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,52 +55,48 @@ class ScoreCardError(Exception):
 class Card:
     @classmethod
     def fmt_ms(cls, tval):
-        return f'{int(tval*1000)} ms' if tval >= 0 else '--'
+        return f'{int(tval * 1000)} ms' if tval >= 0 else '--'
 
     @classmethod
     def fmt_size(cls, val):
-        if val >= (1024*1024*1024):
-            return f'{val / (1024*1024*1024):0.000f}GB'
-        elif val >= (1024 * 1024):
-            return f'{val / (1024*1024):0.000f}MB'
-        elif val >= 1024:
+        if val >= (1024 * 1024 * 1024):
+            return f'{val / (1024 * 1024 * 1024):0.000f}GB'
+        if val >= (1024 * 1024):
+            return f'{val / (1024 * 1024):0.000f}MB'
+        if val >= 1024:
             return f'{val / 1024:0.000f}KB'
-        else:
-            return f'{val:0.000f}B'
+        return f'{val:0.000f}B'
 
     @classmethod
     def fmt_mbs(cls, val):
         if val is None or val < 0:
             return '--'
-        if val >= (1024*1024):
-            return f'{val/(1024*1024):.3g} MB/s'
-        elif val >= 1024:
+        if val >= (1024 * 1024):
+            return f'{val / (1024 * 1024):.3g} MB/s'
+        if val >= 1024:
             return f'{val / 1024:.3g} KB/s'
-        else:
-            return f'{val:.3g} B/s'
+        return f'{val:.3g} B/s'
 
     @classmethod
     def fmt_speed(cls, val):
         if val is None or val < 0:
             return '--'
-        if val >= (10*1024*1024):
-            return f'{(val/(1024*1024)):.3f} MB/s'
-        elif val >= (10*1024):
-            return f'{val/1024:.3f} KB/s'
-        else:
-            return f'{val:.3f} B/s'
+        if val >= (10 * 1024 * 1024):
+            return f'{(val / (1024 * 1024)):.3f} MB/s'
+        if val >= (10 * 1024):
+            return f'{val / 1024:.3f} KB/s'
+        return f'{val:.3f} B/s'
 
     @classmethod
     def fmt_speed_result(cls, val, limit):
         if val is None or val < 0:
             return '--'
         pct = ((val / limit) * 100) - 100
-        if val >= (10*1024*1024):
-            return f'{(val/(1024*1024)):.3f} MB/s, {pct:+.1f}%'
-        elif val >= (10*1024):
-            return f'{val/1024:.3f} KB/s, {pct:+.1f}%'
-        else:
-            return f'{val:.3f} B/s, {pct:+.1f}%'
+        if val >= (10 * 1024 * 1024):
+            return f'{(val / (1024 * 1024)):.3f} MB/s, {pct:+.1f}%'
+        if val >= (10 * 1024):
+            return f'{val / 1024:.3f} KB/s, {pct:+.1f}%'
+        return f'{val:.3f} B/s, {pct:+.1f}%'
 
     @classmethod
     def fmt_reqs(cls, val):
@@ -235,6 +240,7 @@ class ScoreRunner:
                  with_flame: bool = False,
                  socks_args: Optional[List[str]] = None,
                  limit_rate: Optional[str] = None,
+                 http_plain: bool = False,
                  suppress_cl: bool = False):
         self.verbose = verbose
         self.env = env
@@ -249,17 +255,19 @@ class ScoreRunner:
         self._socks_args = socks_args
         self._limit_rate_num = 0
         self._limit_rate = limit_rate
+        self._http_plain = http_plain
+        self._scheme = 'http' if http_plain else 'https'
         if self._limit_rate:
             m = re.match(r'(\d+(\.\d+)?)([gmkb])?', self._limit_rate.lower())
             if not m:
                 raise Exception(f'unrecognised limit-rate: {self._limit_rate}')
             self._limit_rate_num = float(m.group(1))
             if m.group(3) == 'g':
-                self._limit_rate_num *= (1024*1024*1024)
+                self._limit_rate_num *= 1024 * 1024 * 1024
             elif m.group(3) == 'm':
-                self._limit_rate_num *= (1024*1024)
+                self._limit_rate_num *= 1024 * 1024
             elif m.group(3) == 'k':
-                self._limit_rate_num *= (1024)
+                self._limit_rate_num *= 1024
             elif m.group(3) == 'b':
                 pass
             else:
@@ -295,7 +303,7 @@ class ScoreRunner:
                     curl = self.mk_curl_client()
                     args = [
                         '--http3-only' if self.protocol == 'h3' else '--http2',
-                        f'--{ipv}', f'https://{authority}/'
+                        f'--{ipv}', f'{self._scheme}://{authority}/'
                     ]
                     r = curl.run_direct(args=args, with_stats=True)
                     if r.exit_code == 0 and len(r.stats) == 1:
@@ -330,7 +338,7 @@ class ScoreRunner:
                 self._make_docs_file(docs_dir=server_docs,
                                      fname=fname, fsize=fsize)
         self._make_docs_file(docs_dir=server_docs,
-                             fname='reqs10.data', fsize=10*1024)
+                             fname='reqs10.data', fsize=10 * 1024)
 
     def _check_downloads(self, r: ExecResult, count: int):
         error = ''
@@ -368,8 +376,7 @@ class ScoreRunner:
                 profiles.append(r.profile)
         if self._limit_rate:
             return Card.mk_speed_cell(samples, profiles, errors, self._limit_rate_num)
-        else:
-            return Card.mk_mbs_cell(samples, profiles, errors)
+        return Card.mk_mbs_cell(samples, profiles, errors)
 
     def dl_serial(self, url: str, count: int, nsamples: int = 1):
         samples = []
@@ -397,8 +404,7 @@ class ScoreRunner:
                 profiles.append(r.profile)
         if self._limit_rate:
             return Card.mk_speed_cell(samples, profiles, errors, self._limit_rate_num)
-        else:
-            return Card.mk_mbs_cell(samples, profiles, errors)
+        return Card.mk_mbs_cell(samples, profiles, errors)
 
     def dl_parallel(self, url: str, count: int, nsamples: int = 1):
         samples = []
@@ -431,8 +437,7 @@ class ScoreRunner:
                 profiles.append(r.profile)
         if self._limit_rate:
             return Card.mk_speed_cell(samples, profiles, errors, self._limit_rate_num)
-        else:
-            return Card.mk_mbs_cell(samples, profiles, errors)
+        return Card.mk_mbs_cell(samples, profiles, errors)
 
     def downloads(self, count: int, fsizes: List[int], meta: Dict[str, Any]) -> Dict[str, Any]:
         nsamples = meta['samples']
@@ -454,7 +459,7 @@ class ScoreRunner:
                 'sval': Card.fmt_size(fsize)
             }]
             self.info(f'{row[0]["sval"]} downloads...')
-            url = f'https://{self.env.domain1}:{self.server_port}/score{row[0]["sval"]}.data'
+            url = f'{self._scheme}://{self.env.domain1}:{self.server_port}/score{row[0]["sval"]}.data'
             if 'single' in cols:
                 row.append(self.dl_single(url=url, nsamples=nsamples))
             if count > 1:
@@ -576,7 +581,7 @@ class ScoreRunner:
                 'sval': Card.fmt_size(fsize)
             }]
             self.info(f'{row[0]["sval"]} uploads...')
-            url = f'https://{self.env.domain1}:{self.server_port}/curltest/put'
+            url = f'{self._scheme}://{self.env.domain1}:{self.server_port}/curltest/put'
             fname = f'upload{row[0]["sval"]}.data'
             fpath = self._make_docs_file(docs_dir=self.env.gen_dir,
                                          fname=fname, fsize=fsize)
@@ -633,8 +638,8 @@ class ScoreRunner:
         return Card.mk_reqs_cell(samples, profiles, errors)
 
     def requests(self, count: int, meta: Dict[str, Any]) -> Dict[str, Any]:
-        url = f'https://{self.env.domain1}:{self.server_port}/reqs10.data'
-        fsize = 10*1024
+        url = f'{self._scheme}://{self.env.domain1}:{self.server_port}/reqs10.data'
+        fsize = 10 * 1024
         cols = ['size', 'total']
         rows = []
         mparallel = meta['request_parallels']
@@ -761,7 +766,6 @@ def run_score(args, protocol):
         for x in args.request_parallels:
             request_parallels.extend([int(s) for s in x.split(',')])
 
-
     if args.downloads or args.uploads or args.requests or args.handshakes:
         handshakes = args.handshakes
         if not args.downloads:
@@ -838,7 +842,7 @@ def run_score(args, protocol):
                 server_port = env.h3_port
             else:
                 server_descr = f'httpd/{env.httpd_version()}'
-                server_port = env.https_port
+                server_port = env.http_port if args.http_plain else env.https_port
             card = ScoreRunner(env=env,
                                protocol=protocol,
                                server_descr=server_descr,
@@ -848,7 +852,8 @@ def run_score(args, protocol):
                                upload_parallel=args.upload_parallel,
                                with_flame=args.flame,
                                socks_args=socks_args,
-                               limit_rate=args.limit_rate)
+                               limit_rate=args.limit_rate,
+                               http_plain=args.http_plain)
             card.setup_resources(server_docs, downloads)
             cards.append(card)
 
@@ -960,6 +965,8 @@ def main():
                         default = False, help="produce a flame graph on curl")
     parser.add_argument("--limit-rate", action='store', type=str,
                         default=None, help="use curl's --limit-rate")
+    parser.add_argument("--http-plain", action='store_true',
+                        default=False, help="run http: test instead of https:")
 
     parser.add_argument("-H", "--handshakes", action='store_true',
                         default=False, help="evaluate handshakes only")

@@ -62,7 +62,7 @@ struct memory {
   size_t size;
 };
 
-static size_t write_cb(void *contents, size_t sz, size_t nmemb, void *ctx)
+static size_t write_cb(char *contents, size_t sz, size_t nmemb, void *ctx)
 {
   size_t realsize = sz * nmemb;
   struct memory *mem = (struct memory *)ctx;
@@ -173,7 +173,7 @@ static size_t follow_links(CURLM *multi, struct memory *mem, const char *url)
 
 static int is_html(const char *ctype)
 {
-  return ctype != NULL && strlen(ctype) > 10 && strstr(ctype, "text/html");
+  return ctype && strlen(ctype) > 10 && strstr(ctype, "text/html");
 }
 
 int main(void)

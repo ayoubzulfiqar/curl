@@ -22,7 +22,6 @@
  *
  ***************************************************************************/
 #include "unitcheck.h"
-
 #include "splay.h"
 
 static void splayprint(struct Curl_tree *t, int d, char output)
@@ -98,7 +97,7 @@ static CURLcode test_unit1309(const char *arg)
     }
   }
 
-  fail_unless(root == NULL, "tree not empty after removing all nodes");
+  fail_unless(!root, "tree not empty after removing all nodes");
 
   /* rebuild tree */
   for(i = 0; i < NUM_NODES; i++) {
@@ -128,7 +127,7 @@ static CURLcode test_unit1309(const char *arg)
     }
   }
 
-  fail_unless(root == NULL, "tree not empty when it should be");
+  fail_unless(!root, "tree not empty when it should be");
 
   UNITTEST_END_SIMPLE
 }

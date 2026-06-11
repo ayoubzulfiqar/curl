@@ -24,7 +24,6 @@
 #include "unitcheck.h"
 
 #ifndef CURL_DISABLE_HTTP
-
 #include "urldata.h"
 #include "url.h"
 
@@ -35,6 +34,8 @@ struct check1626 {
 
 static CURLcode test_unit1626(const char *arg)
 {
+  UNITTEST_BEGIN_SIMPLE
+
   size_t i;
   static const struct check1626 list[] = {
     /* basic */
@@ -95,8 +96,6 @@ static CURLcode test_unit1626(const char *arg)
     { "Header :    value", "value" },
   };
 
-  (void)arg;
-
   for(i = 0; i < CURL_ARRAYSIZE(list); i++) {
     bool ok;
     char *get = Curl_copy_header_value(list[i].in);
@@ -118,13 +117,13 @@ static CURLcode test_unit1626(const char *arg)
   if(i != CURL_ARRAYSIZE(list))
     return CURLE_FAILED_INIT;
 
-  return CURLE_OK;
+  UNITTEST_END_SIMPLE
 }
 #else
 /* for HTTP-disabled builds */
 static CURLcode test_unit1626(const char *arg)
 {
-  (void)arg;
-  return CURLE_OK;
+  UNITTEST_BEGIN_SIMPLE
+  UNITTEST_END_SIMPLE
 }
 #endif

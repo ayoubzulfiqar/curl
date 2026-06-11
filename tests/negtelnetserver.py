@@ -23,8 +23,7 @@
 #
 """A telnet server which negotiates."""
 
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
+from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
 import logging
@@ -39,6 +38,7 @@ if sys.version_info.major >= 3:
 else:
     import SocketServer as socketserver
 
+
 log = logging.getLogger(__name__)
 HOST = "localhost"
 IDENT = "NTEL"
@@ -46,6 +46,7 @@ IDENT = "NTEL"
 # The strings that indicate the test framework is checking our aliveness
 VERIFIED_REQ = "verifiedserver"
 VERIFIED_RSP = "WE ROOLZ: {pid}"
+
 
 def telnetserver(options):
     """Start up a TCP server with a telnet handler and serve DICT requests forever."""
@@ -67,6 +68,7 @@ def telnetserver(options):
     # leaving `with` calls server.close() automatically
     return ScriptRC.SUCCESS
 
+
 class NegotiatingTelnetHandler(socketserver.BaseRequestHandler):
     """Handler class for Telnet connections."""
 
@@ -82,7 +84,7 @@ class NegotiatingTelnetHandler(socketserver.BaseRequestHandler):
             neg.send_wont("NAWS")
 
             # Get the data passed through the negotiator
-            data = neg.recv(4*1024)
+            data = neg.recv(4 * 1024)
             log.debug("Incoming data: %r", data)
 
             if VERIFIED_REQ.encode('utf-8') in data:
@@ -104,13 +106,14 @@ class NegotiatingTelnetHandler(socketserver.BaseRequestHandler):
             # put some effort into making a clean socket shutdown
             # that does not give the client ECONNRESET
             self.request.settimeout(0.1)
-            self.request.recv(4*1024)
+            self.request.recv(4 * 1024)
             self.request.shutdown(socket.SHUT_RDWR)
 
         except IOError:
             log.exception("IOError hit during request")
 
-class Negotiator(object):
+
+class Negotiator:
     NO_NEG = 0
     START_NEG = 1
     WILL = 2
@@ -164,7 +167,7 @@ class Negotiator(object):
             log.debug("Starting negotiation (IAC)")
             self.state = self.START_NEG
         else:
-            # Just append the incoming byte to the buffer
+            # Append the incoming byte to the buffer
             buffer.append(byte_int)
 
     def start_neg(self, byte_int):
@@ -238,7 +241,8 @@ class Negotiator(object):
         log.debug("Sending WONT %s", option_str)
         self.send_iac([NegTokens.WONT, NegOptions.to_val(option_str)])
 
-class NegBase(object):
+
+class NegBase:
     @classmethod
     def to_val(cls, name):
         return getattr(cls, name)
@@ -250,6 +254,7 @@ class NegBase(object):
                 return k
 
         return "<unknown>"
+
 
 class NegTokens(NegBase):
     # The start of a negotiation sequence
@@ -268,6 +273,7 @@ class NegTokens(NegBase):
     # The end of sub-negotiation options.
     SE = 240
 
+
 class NegOptions(NegBase):
     # Binary Transmission
     BINARY = 0
@@ -279,6 +285,7 @@ class NegOptions(NegBase):
     NEW_ENVIRON = 39
     # Charset option
     CHARSET = 42
+
 
 def get_options():
     parser = argparse.ArgumentParser()
@@ -297,6 +304,7 @@ def get_options():
                         help="IPv4 flag")
 
     return parser.parse_args()
+
 
 def setup_logging(options):
     """Set up logging from the command line options."""
@@ -330,12 +338,14 @@ def setup_logging(options):
         stdout_handler.setLevel(logging.DEBUG)
         root_logger.addHandler(stdout_handler)
 
-class ScriptRC(object):
+
+class ScriptRC:
     """Enum for script return codes."""
 
     SUCCESS = 0
     FAILURE = 1
     EXCEPTION = 2
+
 
 if __name__ == '__main__':
     # Get the options from the user.

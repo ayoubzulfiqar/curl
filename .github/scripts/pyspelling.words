@@ -167,8 +167,10 @@ CWE
 cyassl
 Cygwin
 daniel
+datagrams
 datatracker
 dbg
+decapsulation
 Debian
 DEBUGBUILD
 decrypt
@@ -193,6 +195,7 @@ devtools
 DHCP
 DHE
 dir
+discoverable
 distro
 distro's
 distros
@@ -233,6 +236,7 @@ EGD
 EHLO
 EINTR
 else's
+encapsulation
 encodings
 enctype
 endianness
@@ -778,10 +782,10 @@ singlecwd
 SINIX
 Sintonen
 sizeof
-Slowloris
 SLE
 slist
 sln
+Slowloris
 SMB
 smb
 SMBS
@@ -895,6 +899,7 @@ trustless
 Tse
 Tsujikawa
 TTL
+tty
 tvOS
 txt
 typedef

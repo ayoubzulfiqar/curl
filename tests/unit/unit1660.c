@@ -24,7 +24,6 @@
 #include "unitcheck.h"
 
 #if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_HSTS)
-
 #include "urldata.h"
 #include "hsts.h"
 
@@ -46,7 +45,7 @@ static CURLcode test_unit1660(const char *arg)
   struct testit {
     const char *host;
     const char *chost;     /* if non-NULL, use to lookup with */
-    const char *hdr;       /* if NULL, just do the lookup */
+    const char *hdr;       /* if NULL, do the lookup */
     const CURLcode result; /* parse result */
   };
 
@@ -128,18 +127,18 @@ static CURLcode test_unit1660(const char *arg)
 
       if(result != headers[i].result) {
         curl_mfprintf(stderr, "Curl_hsts_parse(%s) failed: %d\n",
-                      headers[i].hdr, result);
+                      headers[i].hdr, (int)result);
         unitfail++;
         continue;
       }
       else if(result) {
-        curl_mprintf("Input %u: error %d\n", i, (int)result);
+        curl_mprintf("Input %d: error %d\n", i, (int)result);
         continue;
       }
     }
 
     chost = headers[i].chost ? headers[i].chost : headers[i].host;
-    e = Curl_hsts(h, chost, strlen(chost), TRUE);
+    e = hsts_check(h, chost, strlen(chost), TRUE);
     showsts(e, chost);
   }
 
@@ -148,7 +147,7 @@ static CURLcode test_unit1660(const char *arg)
   /* verify that it is exists for 7 seconds */
   chost = "expire.example";
   for(i = 100; i < 110; i++) {
-    e = Curl_hsts(h, chost, strlen(chost), TRUE);
+    e = hsts_check(h, chost, strlen(chost), TRUE);
     showsts(e, chost);
     deltatime++; /* another second passed */
   }

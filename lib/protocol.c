@@ -153,7 +153,8 @@ const struct Curl_scheme Curl_scheme_https = {
   CURLPROTO_HTTPS,                      /* protocol */
   CURLPROTO_HTTP,                       /* family */
   PROTOPT_SSL | PROTOPT_CREDSPERREQUEST | PROTOPT_ALPN | /* flags */
-  PROTOPT_USERPWDCTRL | PROTOPT_CONN_REUSE,
+  PROTOPT_USERPWDCTRL | PROTOPT_CONN_REUSE |
+  PROTOPT_HTTP_PROXY_TUNNEL,
   PORT_HTTPS,                           /* defport */
 };
 
@@ -316,21 +317,20 @@ const struct Curl_scheme Curl_scheme_smb = {
 #endif
   CURLPROTO_SMB,                        /* protocol */
   CURLPROTO_SMB,                        /* family */
-  PROTOPT_CONN_REUSE,                   /* flags */
+  PROTOPT_NONE,                         /* flags */
   PORT_SMB,                             /* defport */
 };
 
 const struct Curl_scheme Curl_scheme_smbs = {
   "smbs",                               /* scheme */
-#if defined(CURL_ENABLE_SMB) && defined(USE_CURL_NTLM_CORE) &&  \
-  defined(USE_SSL)
+#if defined(CURL_ENABLE_SMB) && defined(USE_CURL_NTLM_CORE) && defined(USE_SSL)
   &Curl_protocol_smb,
 #else
   ZERO_NULL,
 #endif
   CURLPROTO_SMBS,                       /* protocol */
   CURLPROTO_SMB,                        /* family */
-  PROTOPT_SSL | PROTOPT_CONN_REUSE,     /* flags */
+  PROTOPT_SSL,                          /* flags */
   PORT_SMBS,                            /* defport */
 };
 
@@ -360,6 +360,51 @@ const struct Curl_scheme Curl_scheme_smtps = {
   PROTOPT_CLOSEACTION | PROTOPT_SSL | /* flags */
   PROTOPT_NOURLQUERY | PROTOPT_URLOPTIONS | PROTOPT_CONN_REUSE,
   PORT_SMTPS,                       /* defport */
+};
+
+const struct Curl_scheme Curl_scheme_socks = {
+  "socks",                          /* scheme */
+  ZERO_NULL,
+  CURLPROTO_SOCKS,                  /* protocol */
+  CURLPROTO_SOCKS,                  /* family */
+  PROTOPT_NO_TRANSFER,              /* flags */
+  PORT_SOCKS,                       /* defport */
+};
+
+const struct Curl_scheme Curl_scheme_socks4 = {
+  "socks4",                         /* scheme */
+  ZERO_NULL,
+  CURLPROTO_SOCKS,                  /* protocol */
+  CURLPROTO_SOCKS,                  /* family */
+  PROTOPT_NO_TRANSFER,              /* flags */
+  PORT_SOCKS,                       /* defport */
+};
+
+const struct Curl_scheme Curl_scheme_socks4a = {
+  "socks4a",                        /* scheme */
+  ZERO_NULL,
+  CURLPROTO_SOCKS,                  /* protocol */
+  CURLPROTO_SOCKS,                  /* family */
+  PROTOPT_NO_TRANSFER,              /* flags */
+  PORT_SOCKS,                       /* defport */
+};
+
+const struct Curl_scheme Curl_scheme_socks5 = {
+  "socks5",                         /* scheme */
+  ZERO_NULL,
+  CURLPROTO_SOCKS,                  /* protocol */
+  CURLPROTO_SOCKS,                  /* family */
+  PROTOPT_NO_TRANSFER,              /* flags */
+  PORT_SOCKS,                       /* defport */
+};
+
+const struct Curl_scheme Curl_scheme_socks5h = {
+  "socks5h",                         /* scheme */
+  ZERO_NULL,
+  CURLPROTO_SOCKS,                  /* protocol */
+  CURLPROTO_SOCKS,                  /* family */
+  PROTOPT_NO_TRANSFER,              /* flags */
+  PORT_SOCKS,                       /* defport */
 };
 
 const struct Curl_scheme Curl_scheme_telnet = {
@@ -398,14 +443,14 @@ const struct Curl_scheme Curl_scheme_ws = {
   CURLPROTO_WS,                         /* protocol */
   CURLPROTO_HTTP,                       /* family */
   PROTOPT_CREDSPERREQUEST |             /* flags */
-  PROTOPT_USERPWDCTRL,
+  PROTOPT_USERPWDCTRL | PROTOPT_HTTP_PROXY_TUNNEL,
   PORT_HTTP                             /* defport */
 };
 
 const struct Curl_scheme Curl_scheme_wss = {
   "wss",                                /* scheme */
 #if defined(CURL_DISABLE_WEBSOCKETS) || defined(CURL_DISABLE_HTTP) || \
-    !defined(USE_SSL)
+  !defined(USE_SSL)
   ZERO_NULL,
 #else
   &Curl_protocol_ws,
@@ -413,7 +458,7 @@ const struct Curl_scheme Curl_scheme_wss = {
   CURLPROTO_WSS,                        /* protocol */
   CURLPROTO_HTTP,                       /* family */
   PROTOPT_SSL | PROTOPT_CREDSPERREQUEST | /* flags */
-  PROTOPT_USERPWDCTRL,
+  PROTOPT_USERPWDCTRL | PROTOPT_HTTP_PROXY_TUNNEL,
   PORT_HTTPS                            /* defport */
 };
 
@@ -431,49 +476,54 @@ const struct Curl_scheme *Curl_getn_scheme(const char *scheme, size_t len)
      6. make sure this function uses the same hash function that worked for
      schemetable.c
      */
-  static const struct Curl_scheme * const all_schemes[47] = {
-    &Curl_scheme_mqtt,
-    &Curl_scheme_smtp,
-    &Curl_scheme_tftp,
-    &Curl_scheme_imap, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-    &Curl_scheme_ldaps,
-    &Curl_scheme_dict, NULL,
-    &Curl_scheme_file, NULL,
-    &Curl_scheme_pop3s,
-    &Curl_scheme_ftp,
-    &Curl_scheme_scp,
-    &Curl_scheme_mqtts,
-    &Curl_scheme_imaps,
-    &Curl_scheme_ldap,
-    &Curl_scheme_http,
-    &Curl_scheme_smb, NULL, NULL,
-    &Curl_scheme_telnet,
-    &Curl_scheme_https,
-    &Curl_scheme_gopher,
-    &Curl_scheme_rtsp, NULL, NULL,
-    &Curl_scheme_wss, NULL,
-    &Curl_scheme_gophers,
+  static const struct Curl_scheme * const all_schemes[59] = { NULL,
+    &Curl_scheme_pop3, NULL,
     &Curl_scheme_smtps,
-    &Curl_scheme_pop3,
-    &Curl_scheme_ws, NULL, NULL,
+    &Curl_scheme_socks,
+    &Curl_scheme_socks4,
+    &Curl_scheme_socks5, NULL, NULL,
+    &Curl_scheme_gophers,
+    &Curl_scheme_ws,
     &Curl_scheme_sftp,
-    &Curl_scheme_ftps, NULL,
-    &Curl_scheme_smbs, NULL,
+    &Curl_scheme_socks4a,
+    &Curl_scheme_scp,
+    &Curl_scheme_rtsp,
+    &Curl_scheme_dict, NULL, NULL,
+    &Curl_scheme_gopher, NULL, NULL, NULL,
+    &Curl_scheme_wss, NULL,
+    &Curl_scheme_smb, NULL,
+    &Curl_scheme_ldap,
+    &Curl_scheme_ldaps,
+    &Curl_scheme_imap, NULL, NULL, NULL,
+    &Curl_scheme_imaps,
+    &Curl_scheme_https,
+    &Curl_scheme_tftp,
+    &Curl_scheme_telnet, NULL, NULL, NULL,
+    &Curl_scheme_file,
+    &Curl_scheme_smtp, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    &Curl_scheme_ftp,
+    &Curl_scheme_mqtt, NULL,
+    &Curl_scheme_socks5h,
+    &Curl_scheme_http,
+    &Curl_scheme_pop3s, NULL,
+    &Curl_scheme_mqtts, NULL,
+    &Curl_scheme_smbs,
+    &Curl_scheme_ftps,
   };
 
   if(len && (len <= 7)) {
     const char *s = scheme;
     size_t l = len;
     const struct Curl_scheme *h;
-    unsigned int c = 792;
+    unsigned int c = 443;
     while(l) {
-      c <<= 4;
+      c <<= 5;
       c += (unsigned int)Curl_raw_tolower(*s);
       s++;
       l--;
     }
 
-    h = all_schemes[c % 47];
+    h = all_schemes[c % 59];
     if(h && curl_strnequal(scheme, h->name, len) && !h->name[len])
       return h;
   }

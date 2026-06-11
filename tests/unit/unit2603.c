@@ -24,7 +24,6 @@
 #include "unitcheck.h"
 
 #ifndef CURL_DISABLE_HTTP
-
 #include "urldata.h"
 #include "http1.h"
 #include "curl_trc.h"
@@ -77,13 +76,13 @@ static void parse_success(const struct tcase *t)
     result = Curl_h1_req_parse_read(&p, buf, buflen, t->default_scheme,
                                     t->custom_method, 0, &nread);
     if(result) {
-      curl_mfprintf(stderr, "got result %d parsing: '%s'\n", result, buf);
+      curl_mfprintf(stderr, "got result %d parsing: '%s'\n", (int)result, buf);
       fail("error consuming");
     }
     in_consumed += nread;
     if(nread != buflen) {
       if(!p.done) {
-        curl_mfprintf(stderr, "only %zd/%zu consumed for: '%s'\n",
+        curl_mfprintf(stderr, "only %zu/%zu consumed for: '%s'\n",
                       nread, buflen, buf);
         fail("not all consumed");
       }

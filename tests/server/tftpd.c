@@ -413,7 +413,7 @@ static ssize_t write_behind(struct testcase *test, int convert)
 
   b = &bfs[nextone];
   if(b->counter < -1)             /* anything to flush? */
-    return 0;                     /* just nop if nothing to do */
+    return 0;                     /* nop if nothing to do */
 
   if(!test->ofile) {
     char outfile[256];
@@ -453,11 +453,11 @@ static ssize_t write_behind(struct testcase *test, int convert)
   while(ct--) {                   /* loop over the buffer */
     c = (unsigned char)*p++;      /* pick up a character */
     if(prevchar == '\r') {        /* if prev char was cr */
-      if(c == '\n')               /* if have cr,lf then just */
+      if(c == '\n')                            /* if have cr,lf then */
         curl_lseek(test->ofile, -1, SEEK_CUR); /* smash lf on top of the cr */
       else if(c == '\0')          /* if have cr,nul then */
-        goto skipit;              /* just skip over the putc */
-      /* else just fall through and allow it */
+        goto skipit;              /* skip over the putc */
+      /* else fall through and allow it */
     }
     /* formerly
        putc(c, file); */
@@ -570,7 +570,7 @@ static int tftpd_parse_servercmd(struct testcase *req)
       else {
         logmsg("Unknown <servercmd> instruction found: %s", cmd);
       }
-      /* try to deal with CRLF or just LF */
+      /* try to deal with CRLF or LF */
       check = strchr(cmd, '\r');
       if(!check)
         check = strchr(cmd, '\n');
@@ -858,7 +858,7 @@ send_ack:
   rap->th_block = htons(recvblock);
   (void)swrite(peer, &ackbuf.storage[0], 4);
 #if defined(HAVE_ALARM) && defined(SIGALRM)
-  mysignal(SIGALRM, justtimeout);        /* just abort read on timeout */
+  mysignal(SIGALRM, justtimeout);        /* abort read on timeout */
   alarm(rexmtval);
 #endif
   /* normally times out and quits */
@@ -918,10 +918,10 @@ static int do_tftp(struct testcase *test, struct tftphdr *tp, ssize_t size)
   cp = (char *)&tp->th_stuff;
   filename = cp;
   do {
-    bool endofit = true;
+    bool endofit = TRUE;
     while(cp < &trsbuf.storage[size]) {
       if(*cp == '\0') {
-        endofit = false;
+        endofit = FALSE;
         break;
       }
       cp++;
@@ -970,7 +970,7 @@ static int do_tftp(struct testcase *test, struct tftphdr *tp, ssize_t size)
   curlx_fclose(server);
 
   for(pf = formata; pf->f_mode; pf++)
-    if(strcmp(pf->f_mode, mode) == 0)
+    if(!strcmp(pf->f_mode, mode))
       break;
   if(!pf->f_mode) {
     nak(TFTP_EBADOP);
@@ -1109,7 +1109,7 @@ static int test_tftpd(int argc, const char **argv)
   snprintf(loglockfile, sizeof(loglockfile), "%s/%s/tftp-%s.lock",
            logdir, SERVERLOGS_LOCKDIR, ipv_inuse);
 
-  install_signal_handlers(true);
+  install_signal_handlers(TRUE);
 
 #ifdef USE_IPV6
   if(!use_ipv6)
@@ -1327,7 +1327,7 @@ tftpd_cleanup:
     clear_advisor_read_lock(loglockfile);
   }
 
-  restore_signal_handlers(true);
+  restore_signal_handlers(TRUE);
 
   if(got_exit_signal) {
     logmsg("========> %s tftpd (port: %d pid: %ld) exits with signal (%d)",

@@ -234,6 +234,12 @@
 /* Define to 1 if you have the `opendir' function. */
 #cmakedefine HAVE_OPENDIR 1
 
+/* Define to 1 if you have the memset_explicit (C23) function. */
+#cmakedefine HAVE_MEMSET_EXPLICIT 1
+
+/* Define to 1 if you have the memset_s (C11) function. */
+#cmakedefine HAVE_MEMSET_S 1
+
 /* Define to 1 if you have the fcntl function. */
 #cmakedefine HAVE_FCNTL 1
 
@@ -673,14 +679,14 @@ ${SIZEOF_TIME_T_CODE}
 /* if wolfSSL has the wolfSSL_UseALPN function. */
 #cmakedefine HAVE_WOLFSSL_USEALPN 1
 
-/* if wolfSSL has the wolfSSL_DES_ecb_encrypt function. */
-#cmakedefine HAVE_WOLFSSL_DES_ECB_ENCRYPT 1
-
 /* if wolfSSL has the wolfSSL_BIO_new function. */
 #cmakedefine HAVE_WOLFSSL_BIO_NEW 1
 
 /* if wolfSSL has the wolfSSL_BIO_set_shutdown function. */
 #cmakedefine HAVE_WOLFSSL_BIO_SET_SHUTDOWN 1
+
+/* if wolfSSL has the wc_Des_EcbEncrypt function. */
+#cmakedefine HAVE_WC_DES_ECBENCRYPT 1
 
 /* if libssh is in use */
 #cmakedefine USE_LIBSSH 1
@@ -705,6 +711,9 @@ ${SIZEOF_TIME_T_CODE}
 
 /* if libuv is in use */
 #cmakedefine USE_LIBUV 1
+
+/* if HTTP/3 proxy support is available */
+#cmakedefine USE_PROXY_HTTP3 1
 
 /* Define to 1 if you have the <uv.h> header file. */
 #cmakedefine HAVE_UV_H 1

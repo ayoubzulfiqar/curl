@@ -40,7 +40,7 @@ typedef size_t ossl_valsize_t;
 typedef int ossl_valsize_t;
 #endif
 
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *stream)
+static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *stream)
 {
   fwrite(ptr, size, nmemb, (FILE *)stream);
   return nmemb * size;
@@ -166,10 +166,10 @@ int main(void)
 
     /* use a fresh connection (optional) this option seriously impacts
      * performance of multiple transfers but it is necessary order to
-     * demonstrate this example. recall that the ssl ctx callback is only
+     * demonstrate this example. recall that the SSL ctx callback is only
      * called _before_ an SSL connection is established, therefore it does not
      * affect existing verified SSL connections already in the connection
-     * cache associated with this handle. normally you would set the ssl ctx
+     * cache associated with this handle. normally you would set the SSL ctx
      * function before making any transfers, and not use this option.
      */
     curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1L);

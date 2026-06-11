@@ -122,7 +122,7 @@ static CURLcode test_lib670(const char *URL)
     if(result != CURLE_OK) {
       curl_mfprintf(stderr,
                     "Something went wrong when building the "
-                    "mime structure: %d\n", result);
+                    "mime structure: %d\n", (int)result);
       goto test_cleanup;
     }
 
@@ -140,10 +140,10 @@ static CURLcode test_lib670(const char *URL)
     formrc = curl_formadd(&formpost, &lastptr,
                           CURLFORM_COPYNAME, testname,
                           CURLFORM_STREAM, &pooh,
-                          CURLFORM_CONTENTLEN, (curl_off_t) 2,
+                          CURLFORM_CONTENTLEN, (curl_off_t)2,
                           CURLFORM_END);
     if(formrc) {
-      curl_mfprintf(stderr, "curl_formadd() = %d\n", formrc);
+      curl_mfprintf(stderr, "curl_formadd() = %d\n", (int)formrc);
       goto test_cleanup;
     }
 

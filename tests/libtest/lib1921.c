@@ -1,5 +1,3 @@
-#ifndef HEADER_CURL_VQUIC_CURL_QUICHE_H
-#define HEADER_CURL_VQUIC_CURL_QUICHE_H
 /***************************************************************************
  *                                  _   _ ____  _
  *  Project                     ___| | | |  _ \| |
@@ -23,23 +21,32 @@
  * SPDX-License-Identifier: curl
  *
  ***************************************************************************/
-#include "curl_setup.h"
+#include "first.h"
 
-#if !defined(CURL_DISABLE_HTTP) && defined(USE_QUICHE)
+static CURLcode test_lib1921(const char *URL)
+{
+  CURLU *u = curl_url();
+  CURLUcode rc;
+  if(!u)
+    return CURLE_FAILED_INIT;
+  (void)URL; /* unused */
+  /* u->scheme remains NULL */
+  rc = curl_url_set(u, CURLUPART_HOST, "example.com", 0);
+  if(!rc)
+    rc = curl_url_set(u, CURLUPART_PATH, "/original", 0);
 
-#include <quiche.h>
-#include <openssl/ssl.h>
+  if(!rc)
+    /* Relative URL + CURLU_DEFAULT_SCHEME reaches redirect_url() */
+    rc = curl_url_set(u, CURLUPART_URL, "/newpath", CURLU_DEFAULT_SCHEME);
 
-struct Curl_cfilter;
-struct Curl_easy;
-
-void Curl_quiche_ver(char *p, size_t len);
-
-CURLcode Curl_cf_quiche_create(struct Curl_cfilter **pcf,
-                               struct Curl_easy *data,
-                               struct connectdata *conn,
-                               struct Curl_sockaddr_ex *addr);
-
-#endif
-
-#endif /* HEADER_CURL_VQUIC_CURL_QUICHE_H */
+  if(!rc) {
+    char *url;
+    rc = curl_url_get(u, CURLUPART_URL, &url, 0);
+    if(!rc) {
+      curl_mprintf("URL: %s\n", url);
+      curl_free(url);
+    }
+  }
+  curl_url_cleanup(u);
+  return rc ? CURLE_BAD_FUNCTION_ARGUMENT : CURLE_OK;
+}

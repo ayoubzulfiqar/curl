@@ -23,7 +23,7 @@
 #
 ###########################################################################
 
-# For documentation, run `man ./runtests.1` and see README.md.
+# For documentation, see docs/runtests.md and README.md.
 
 # Experimental hooks are available to run tests remotely on machines that
 # are able to run curl but are unable to run the test harness.
@@ -589,7 +589,7 @@ sub checksystemfeatures {
                 $feature{"wolfssl"} = 1;
                 $feature{"SSLpinning"} = 1;
             }
-            elsif($libcurl =~ /\s(BoringSSL|AWS-LC)\b/i) {
+            elsif($libcurl =~ /\s(AWS-LC|BoringSSL)\b/i) {
                 # OpenSSL compatible API
                 $feature{"OpenSSL"} = 1;
                 $feature{"SSLpinning"} = 1;
@@ -627,9 +627,13 @@ sub checksystemfeatures {
             }
             if($libcurl =~ /libssh2/i) {
                 $feature{"libssh2"} = 1;
+                $feature{"sshkeyalgo"} = ($ENV{'CURL_TEST_SSH_KEYALGO'} and
+                    $ENV{'CURL_TEST_SSH_KEYALGO'} =~ /^(?:rsa|ecdsa|ed25519)$/) ? $ENV{'CURL_TEST_SSH_KEYALGO'} : 'rsa';
             }
             if($libcurl =~ /libssh\/([0-9.]*)\//i) {
                 $feature{"libssh"} = 1;
+                $feature{"sshkeyalgo"} = ($ENV{'CURL_TEST_SSH_KEYALGO'} and
+                    $ENV{'CURL_TEST_SSH_KEYALGO'} =~ /^(?:rsa|ecdsa|ed25519)$/) ? $ENV{'CURL_TEST_SSH_KEYALGO'} : 'rsa';
                 # Detect simple cases of default libssh configuration files ending up
                 # setting `StrictHostKeyChecking no`. include files, quoted values,
                 # '=value' format not implemented.
@@ -660,9 +664,9 @@ sub checksystemfeatures {
             $feature{"TrackMemory"} = $feat =~ /\bDebug/;
             # curl was built with --enable-debug
             $feature{"Debug"} = $feat =~ /\bDebug/;
-            # ssl enabled
+            # SSL enabled
             $feature{"SSL"} = $feat =~ /SSL/i;
-            # multiple ssl backends available.
+            # multiple SSL backends available.
             $feature{"MultiSSL"} = $feat =~ /MultiSSL/i;
             # large file support
             $feature{"Largefile"} = $feat =~ /Largefile/i;
@@ -753,6 +757,10 @@ sub checksystemfeatures {
                 push @protocols, 'httptls-ipv6';
             }
         }
+    }
+
+    if($torture) {
+        $feature{"torture"} = 1;
     }
 
     if(!$curl) {
@@ -1269,6 +1277,8 @@ sub singletest_check {
     }
 
     if(@validstdout) {
+        $validstdout[0] =~ s/^%EMPTY[\r\n]*//;
+
         # verify redirected stdout
         my @actual = loadarray(stdoutfilename($logdir, $testnum));
 
@@ -1718,8 +1728,7 @@ sub singletest_check {
         my @sout = sort @out;
 
         if($hostname) {
-            # when a hostname is set, we filter out requests to just this
-            # pattern
+            # when a hostname is set, we filter out requests to this pattern
             @sout = grep {/$hostname/} @sout;
         }
 
@@ -1922,11 +1931,11 @@ sub singletest_success {
     my $esttotal = $sofar/$count * $total;
     my $estleft = $esttotal - $sofar;
     my $timeleft=sprintf("remaining: %02d:%02d",
-                     $estleft/60,
-                     $estleft%60);
+                     $estleft / 60,
+                     $estleft % 60);
     my $took = $timevrfyend{$testnum} - $timeprepini{$testnum};
     my $duration = sprintf("duration: %02d:%02d",
-                           $sofar/60, $sofar%60);
+                           $sofar / 60, $sofar % 60);
     if(!$automakestyle) {
         logmsg sprintf("OK (%-3d out of %-3d, %s, took %.3fs, %s)\n",
                        $count, $total, $timeleft, $took, $duration);
@@ -2607,7 +2616,7 @@ EOHELP
         }
     }
     elsif($ARGV[0] =~ /^to$/i) {
-        $fromnum = $number+1;
+        $fromnum = $number + 1;
     }
     elsif($ARGV[0] =~ /^!(\d+)/) {
         $fromnum = -1;
@@ -2639,7 +2648,7 @@ if(!$randseed) {
     my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
         localtime(time);
     # seed of the month. December 2019 becomes 201912
-    $randseed = ($year+1900)*100 + $mon+1;
+    $randseed = ($year + 1900) * 100 + $mon + 1;
     print "Using curl: $CURL\n";
     open(my $curlvh, "-|", exerunner() . shell_quote($CURL) . " --version 2>$dev_null") ||
         die "could not get curl version!";
@@ -2669,7 +2678,7 @@ if($valgrind) {
         # since valgrind 2.1.x, '--tool' option is mandatory
         # use it, if it is supported by the version installed on the system
         # (this happened in 2003, so we could probably do not need to care about
-        # that old version any longer and just delete this check)
+        # that old version any longer and delete this check)
         runclient("valgrind --help 2>&1 | grep -- --tool >$dev_null 2>&1");
         if(($? >> 8)) {
             $valgrind_tool="";
@@ -2684,7 +2693,7 @@ if($valgrind) {
 
         # valgrind 3 renamed the --logfile option to --log-file!!!
         # (this happened in 2005, so we could probably do not need to care about
-        # that old version any longer and just delete this check)
+        # that old version any longer and delete this check)
         my $ver=join(' ', runclientoutput("valgrind --version"));
         # cut off all but digits and dots
         $ver =~ s/[^0-9.]//g;
@@ -3048,7 +3057,7 @@ else {
     $retry_left = $retry;
 }
 
-while() {
+while(1) {
     # check the abort flag
     if($globalabort) {
         logmsg singletest_dumplogs();
@@ -3206,7 +3215,7 @@ while() {
     $endwaitcnt += $runnerwait;
     if($endwaitcnt >= 10) {
         # Once all tests have been scheduled on a runner at the end of a test
-        # run, we just wait for their results to come in. If we are still
+        # run, we wait for their results to come in. If we are still
         # waiting after a couple of minutes ($endwaitcnt multiplied by
         # $runnerwait, plus $jobs because that number will not time out), display
         # the same test runner status as we give with a SIGUSR1. This will
@@ -3336,7 +3345,7 @@ if($executed) {
         logmsg "IGNORED: failed tests: $sorted\n";
     }
     logmsg sprintf("TESTDONE: $ok tests out of $total reported OK: %d%%\n",
-                   $ok/$total*100);
+                   $ok / $total * 100);
 
     if($failed && ($ok != $total)) {
         my $failedsorted = numsortwords($failed);

@@ -27,10 +27,9 @@
 import logging
 import os
 import re
+
 import pytest
-
-from testenv import Env, CurlClient, ExecResult
-
+from testenv import CurlClient, Env, ExecResult
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +48,6 @@ class TestProxyAuth:
             if m:
                 return m.group(1)
         assert False, f'tunnel protocol not found in:\n{"".join(r.trace_lines)}'
-        return None
 
     # download via http: proxy (no tunnel), no auth
     def test_13_01_proxy_no_auth(self, env: Env, httpd, configures_httpd):

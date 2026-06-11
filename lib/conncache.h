@@ -56,7 +56,7 @@ struct cpool {
   struct Curl_easy *idata; /* internal handle for maintenance */
   struct Curl_share *share; /* != NULL if pool belongs to share */
   BIT(locked);
-  BIT(initialised);
+  BIT(initialized);
 };
 
 /* Init the pool, pass multi only if pool is owned by it.
@@ -98,7 +98,7 @@ typedef bool Curl_cpool_conn_match_cb(struct connectdata *conn,
                                       void *userdata);
 
 /* Act on the result of the find, may override it. */
-typedef bool Curl_cpool_done_match_cb(bool result, void *userdata);
+typedef bool Curl_cpool_done_match_cb(void *userdata);
 
 /**
  * Find a connection in the pool matching `destination`.

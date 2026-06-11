@@ -26,10 +26,9 @@
 #
 import logging
 import re
+
 import pytest
-
-from testenv import Env, CurlClient
-
+from testenv import CurlClient, Env
 
 log = logging.getLogger(__name__)
 
@@ -165,11 +164,9 @@ class TestEyeballs:
             '--alt-svc', f'{asfile}', '--http3'
         ])
         r.check_response(count=1, http_status=200)
-        # We expect the connection to be preferring HTTP/1.1 in the ALPN
+        # We expect the connection to use HTTP/1.1
         assert r.total_connects == 1, f'{r.dump_logs()}'
-        re_m = re.compile(r'.* ALPN: curl offers http/1.1,h2')
-        lines = [line for line in r.trace_lines if re_m.match(line)]
-        assert len(lines), f'{r.dump_logs()}'
+        assert r.stats[0]['http_version'] == '1.1', f'{r}'
 
     @pytest.mark.skipif(condition=not Env.have_h3(), reason="h3 not supported")
     def test_06_22_as_ignore_h3h1(self, env: Env, httpd, configures_httpd, nghttpx):
@@ -217,3 +214,16 @@ class TestEyeballs:
         r.check_exit_code(0)
         r.check_response(count=1, http_status=200)
         assert r.stats[0]['http_version'] == '2'
+
+    # h3 download using --connect-to IPv6 address
+    @pytest.mark.skipif(condition=not Env.have_h3(), reason="missing HTTP/3 support")
+    @pytest.mark.skipif(condition=not Env.curl_has_feature('IPv6'), reason="no IPv6")
+    def test_06_25_h3_connect_to(self, env: Env, httpd, nghttpx):
+        curl = CurlClient(env=env, force_resolv=False)
+        urln = f'https://{env.authority_for(env.domain1, "h3")}/data.json'
+        r = curl.http_download(urls=[urln], extra_args=[
+            '--http3-only', '--connect-to',
+            f'{env.authority_for(env.domain1, "h3")}:[::1]:{env.https_port}'
+        ])
+        r.check_response(count=1, http_status=200)
+        assert r.stats[0]['http_version'] == '3'
