@@ -54,7 +54,7 @@ CURLcode Curl_input_digest(struct Curl_easy *data,
   }
 
   if(!checkprefix("Digest", header) || !ISBLANK(header[6]))
-    return CURLE_BAD_CONTENT_ENCODING;
+    return CURLE_AUTH_ERROR;
 
   header += strlen("Digest");
   curlx_str_passblanks(&header);
@@ -117,9 +117,9 @@ CURLcode Curl_output_digest(struct Curl_easy *data,
 #endif
   }
   else {
-    DEBUGASSERT(data->conn->origin);
+    DEBUGASSERT(data->state.origin);
     digest = &data->state.digest;
-    digest_flush_stale(digest, data->conn->origin, data->state.creds);
+    digest_flush_stale(digest, data->state.origin, data->state.creds);
     allocuserpwd = &data->req.hd_auth;
     creds = data->state.creds;
     authp = &data->state.authhost;
