@@ -68,7 +68,7 @@ AC_DEFUN([CURL_CHECK_COMPILER], [
 ***
 *** If you wish to help the curl project to better support your compiler
 *** you can report this and the required info on the libcurl development
-*** mailing list: https://lists.haxx.selistinfo/curl-library/
+*** mailing list: https://lists.haxx.se/listinfo/curl-library/
 ***
 _EOF
   fi
@@ -1115,6 +1115,11 @@ AC_DEFUN([CURL_SET_COMPILER_WARNING_OPTS], [
             tmp_CFLAGS="$tmp_CFLAGS -ftree-vrp"
           fi
 
+          dnl Only gcc 4.4 or later
+          if test "$compiler_num" -ge "404"; then
+            CURL_ADD_COMPILER_WARNINGS([tmp_CFLAGS], [logical-op])
+          fi
+
           dnl Only gcc 4.5 or later
           if test "$compiler_num" -ge "405"; then
             CURL_ADD_COMPILER_WARNINGS([tmp_CFLAGS], [jump-misses-init])
@@ -1255,7 +1260,7 @@ AC_DEFUN([CURL_SET_COMPILER_WARNING_OPTS], [
             tmp_CPPFLAGS="$tmp_CPPFLAGS -Wp64"
             dnl Enable warnings for questionable pointer arithmetic
             tmp_CPPFLAGS="$tmp_CPPFLAGS -Wpointer-arith"
-            dnl Check for function return typw issues
+            dnl Check for function return type issues
             tmp_CPPFLAGS="$tmp_CPPFLAGS -Wreturn-type"
             dnl Warn on variable declarations hiding a previous one
             tmp_CPPFLAGS="$tmp_CPPFLAGS -Wshadow"
