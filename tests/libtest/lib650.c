@@ -48,7 +48,6 @@ static CURLcode test_lib650(const char *URL)
   struct curl_forms formarray[3];
   size_t formlength = 0;
   char flbuf[32];
-  long contentlength = 0;
 
   static const char testname[] = "fieldname";
   static char testdata[] = "this is what we post to the silly web server";
@@ -83,19 +82,17 @@ static CURLcode test_lib650(const char *URL)
     goto test_cleanup;
   }
 
-  contentlength = (long)(strlen(testdata) - 1);
-
   /* Use a form array for the non-copy test. */
   formarray[0].option = CURLFORM_PTRCONTENTS;
   formarray[0].value = testdata;
   formarray[1].option = CURLFORM_CONTENTSLENGTH;
-  formarray[1].value = (char *)(size_t)contentlength;
+  formarray[1].value = (char *)(strlen(testdata) - 1);
   formarray[2].option = CURLFORM_END;
   formarray[2].value = NULL;
   formrc = curl_formadd(&formpost,
                         &lastptr,
                         CURLFORM_PTRNAME, testname,
-                        CURLFORM_NAMELENGTH, strlen(testname) - 1,
+                        CURLFORM_NAMELENGTH, (long)(sizeof(testname) - 2),
                         CURLFORM_ARRAY, formarray,
                         CURLFORM_FILENAME, "remotefile.txt",
                         CURLFORM_END);
@@ -175,19 +172,19 @@ static CURLcode test_lib650(const char *URL)
   }
 
   /* First set the URL that is about to receive our POST. */
-  test_setopt(curl, CURLOPT_URL, URL);
+  easy_setopt(curl, CURLOPT_URL, URL);
 
   /* send a multi-part formpost */
-  test_setopt(curl, CURLOPT_HTTPPOST, formpost);
+  easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
 
   /* get verbose debug output please */
-  test_setopt(curl, CURLOPT_VERBOSE, 1L);
+  easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
-  test_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  test_setopt(curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_301);
+  easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  easy_setopt(curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_301);
 
   /* include headers in the output */
-  test_setopt(curl, CURLOPT_HEADER, 1L);
+  easy_setopt(curl, CURLOPT_HEADER, 1L);
 
   /* Perform the request, result gets the return code */
   result = curl_easy_perform(curl);
