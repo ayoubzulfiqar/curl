@@ -54,6 +54,8 @@ jobs:
     strategy:
       matrix:
         include:
+          # { os: 'dragonflybsd', version: '6.4.2', build: 'autotools', arch: 'x86_64', cc: 'gcc'  , desc: 'openssl !runtests',
+          #   options: '--with-openssl' }
           - { os: 'freebsd'     , version: '15.0',  build: 'autotools', arch: 'x86_64', cc: 'clang', desc: 'openssl',
               options: '--with-openssl --with-gssapi' }
           - { os: 'freebsd'     , version: '15.0',  build: 'cmake'    , arch: 'x86_64', cc: 'clang', desc: 'openssl !unity !runtests !examples',
@@ -83,7 +85,9 @@ jobs:
 
       - name: 'install prereqs'
         run: |
-          if [ "${MATRIX_OS}" = 'freebsd' ]; then
+          if [ "${MATRIX_OS}" = 'dragonflybsd' ]; then
+            sudo pkg install -y autoconf automake libtool perl5 pkgconf brotli openldap26-client libidn2 libnghttp2
+          elif [ "${MATRIX_OS}" = 'freebsd' ]; then
             # https://ports.freebsd.org/
             if [ "${MATRIX_BUILD}" = 'cmake' ]; then
               tools='cmake-core ninja perl5'
@@ -418,7 +422,9 @@ jobs:
       - name: 'install packages'
         timeout-minutes: 2
         run: |
+          sudo find /etc/apt/sources.list.d -type f -not -name 'ubuntu.sources' -delete -print
           sudo sed -i 's/priority:1/priority:9/' /etc/apt/apt-mirrors.txt; cat /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Dpkg::Use-Pty=0 update
           sudo apt-get -o Dpkg::Use-Pty=0 install libfl2
 
       - name: 'cache compiler (djgpp)'
