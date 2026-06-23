@@ -306,7 +306,7 @@ AS_HELP_STRING([--with-rustls=PATH],[where to look for Rustls, PATH points to th
   fi
 ])
 
-OPT_APPLE_SECTRUST=$curl_cv_apple
+OPT_APPLE_SECTRUST=no
 AC_ARG_WITH(apple-sectrust,
 AS_HELP_STRING([--with-apple-sectrust],[enable Apple OS native certificate verification]),[
   OPT_APPLE_SECTRUST=$withval
@@ -5535,11 +5535,11 @@ AC_MSG_NOTICE([Configured to build curl/libcurl:
   Verbose errors:   ${curl_verbose_msg}
   Code coverage:    ${curl_coverage_msg}
   SSPI:             ${curl_sspi_msg}
-  ca native:        ${ca_native}
-  ca cert bundle:   ${ca}${ca_warning}
-  ca cert path:     ${capath}${capath_warning}
-  ca cert embed:    ${CURL_CA_EMBED_msg}
-  ca fallback:      ${with_ca_fallback}
+  CA native:        ${ca_native}
+  CA cert bundle:   ${ca}${ca_warning}
+  CA cert path:     ${capath}${capath_warning}
+  CA cert embed:    ${CURL_CA_EMBED_msg}
+  CA fallback:      ${with_ca_fallback}
   LDAP:             ${curl_ldap_msg}
   LDAPS:            ${curl_ldaps_msg}
   IPFS/IPNS:        ${curl_ipfs_msg}
