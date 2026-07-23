@@ -321,6 +321,9 @@
 /* if you have the gssapi libraries */
 #cmakedefine HAVE_GSSAPI 1
 
+/* if you have Apple GSS */
+#cmakedefine HAVE_GSSAPPLE 1
+
 /* if you have the GNU gssapi libraries */
 #cmakedefine HAVE_GSSGNU 1
 
@@ -335,12 +338,6 @@
 
 /* Define to 1 if you have the <ifaddrs.h> header file. */
 #cmakedefine HAVE_IFADDRS_H 1
-
-/* Define to 1 if you have an IPv6 capable working inet_ntop function. */
-#cmakedefine HAVE_INET_NTOP 1
-
-/* Define to 1 if you have an IPv6 capable working inet_pton function. */
-#cmakedefine HAVE_INET_PTON 1
 
 /* Define to 1 if symbol `sa_family_t' exists */
 #cmakedefine HAVE_SA_FAMILY_T 1
@@ -640,9 +637,6 @@ ${SIZEOF_SIZE_T_CODE}
 /* The size of `time_t', as computed by sizeof. */
 ${SIZEOF_TIME_T_CODE}
 
-/* Define to 1 if you have the ANSI C header files. */
-#cmakedefine STDC_HEADERS 1
-
 /* Define if you have POSIX pthreads */
 #cmakedefine HAVE_THREADS_POSIX 1
 
@@ -775,15 +769,6 @@ ${SIZEOF_TIME_T_CODE}
 
 /* to enable Apple OS-native certificate verification */
 #cmakedefine USE_APPLE_SECTRUST 1
-
-/* Define to 1 if OpenSSL has the SSL_CTX_set_srp_username function. */
-#cmakedefine HAVE_OPENSSL_SRP 1
-
-/* Define to 1 if GnuTLS has the gnutls_srp_verifier function. */
-#cmakedefine HAVE_GNUTLS_SRP 1
-
-/* Define to 1 to enable TLS-SRP support. */
-#cmakedefine USE_TLS_SRP 1
 
 /* Define to 1 to query for HTTPSRR when using DoH */
 #cmakedefine USE_HTTPSRR 1

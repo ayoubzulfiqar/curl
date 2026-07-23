@@ -468,6 +468,7 @@ const struct Curl_cwtype Curl_httpchunk_unencoder = {
   NULL,
   cw_chunked_init,
   cw_chunked_write,
+  Curl_cwriter_def_flush,
   cw_chunked_close,
   sizeof(struct chunked_writer)
 };
@@ -518,9 +519,12 @@ static CURLcode add_last_chunk(struct Curl_easy *data,
   if(result)
     goto out;
 
-  Curl_set_in_callback(data, TRUE);
-  rc = data->set.trailer_callback(&trailers, data->set.trailer_data);
-  Curl_set_in_callback(data, FALSE);
+  {
+    struct Curl_mapi_guard guard;
+    CURL_CBAPI_START(&guard, data, easy_trailer_callback);
+    rc = data->set.trailer_callback(&trailers, data->set.trailer_data);
+    CURL_CBAPI_END(&guard);
+  }
 
   if(rc != CURL_TRAILERFUNC_OK) {
     failf(data, "operation aborted by trailing headers callback");

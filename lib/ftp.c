@@ -445,6 +445,7 @@ static const struct Curl_cwtype ftp_cw_lc = {
   NULL,
   Curl_cwriter_def_init,
   ftp_cw_lc_write,
+  Curl_cwriter_def_flush,
   Curl_cwriter_def_close,
   sizeof(struct ftp_cw_lc_ctx)
 };
@@ -929,11 +930,11 @@ static CURLcode ftp_port_parse_string(struct Curl_easy *data,
 #ifdef USE_IPV6
         struct sockaddr_in6 * const sa6 = (void *)ss;
 #endif
-        /* either ipv6 or (ipv4|domain|interface):port(-range) */
+        /* either IPv6 or (ipv4|domain|interface):port(-range) */
         addrlen = ip_end - string_ftpport;
 #ifdef USE_IPV6
         if(curlx_inet_pton(AF_INET6, string_ftpport, &sa6->sin6_addr) == 1) {
-          /* ipv6 */
+          /* IPv6 */
           addrlen = strlen(string_ftpport);
           ip_end = NULL; /* this got no port ! */
         }
@@ -1713,10 +1714,11 @@ static CURLcode ftp_state_ul_setup(struct Curl_easy *data,
 
     /* Let's read off the proper amount of bytes from the input. */
     if(data->set.seek_func) {
-      Curl_set_in_callback(data, TRUE);
+      struct Curl_mapi_guard guard;
+      CURL_CBAPI_START(&guard, data, easy_seek_func);
       seekerr = data->set.seek_func(data->set.seek_client,
                                     data->state.resume_from, SEEK_SET);
-      Curl_set_in_callback(data, FALSE);
+      CURL_CBAPI_END(&guard);
     }
 
     if(seekerr != CURL_SEEKFUNC_OK) {
@@ -2926,6 +2928,20 @@ static CURLcode ftp_state_loggedin(struct Curl_easy *data,
   return result;
 }
 
+/* A value that becomes part of an FTP control command must not carry a
+   control byte: a CR or LF would end the command line and let a second
+   command be smuggled onto the control connection. */
+static bool ftp_has_ctrl(const char *string)
+{
+  const unsigned char *s = (const unsigned char *)string;
+  while(*s) {
+    if(*s < 0x20)
+      return TRUE;
+    s++;
+  }
+  return FALSE;
+}
+
 /* for USER and PASS responses */
 static CURLcode ftp_state_user_resp(struct Curl_easy *data,
                                     struct ftp_conn *ftpc,
@@ -2948,15 +2964,19 @@ static CURLcode ftp_state_user_resp(struct Curl_easy *data,
     result = ftp_state_loggedin(data, ftpc);
   }
   else if(ftpcode == 332) {
-    if(data->set.str[STRING_FTP_ACCOUNT]) {
-      result = Curl_pp_sendf(data, &ftpc->pp, "ACCT %s",
-                             data->set.str[STRING_FTP_ACCOUNT]);
-      if(!result)
-        ftp_state(data, ftpc, FTP_ACCT);
-    }
-    else {
+    const char *account = data->set.str[STRING_FTP_ACCOUNT];
+    if(!account) {
       failf(data, "ACCT requested but none available");
       result = CURLE_LOGIN_DENIED;
+    }
+    else if(ftp_has_ctrl(account)) {
+      failf(data, "Control byte in FTP account");
+      result = CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+    else {
+      result = Curl_pp_sendf(data, &ftpc->pp, "ACCT %s", account);
+      if(!result)
+        ftp_state(data, ftpc, FTP_ACCT);
     }
   }
   else {
@@ -2965,14 +2985,19 @@ static CURLcode ftp_state_user_resp(struct Curl_easy *data,
     530 User ... access denied
     (the server denies to log the specified user) */
 
-    if(data->set.str[STRING_FTP_ALTERNATIVE_TO_USER] &&
-       !ftpc->ftp_trying_alternative) {
+    const char *alt = data->set.str[STRING_FTP_ALTERNATIVE_TO_USER];
+    if(alt && !ftpc->ftp_trying_alternative) {
       /* Ok, USER failed. Let's try the supplied command. */
-      result = Curl_pp_sendf(data, &ftpc->pp, "%s",
-                             data->set.str[STRING_FTP_ALTERNATIVE_TO_USER]);
-      if(!result) {
-        ftpc->ftp_trying_alternative = TRUE;
-        ftp_state(data, ftpc, FTP_USER);
+      if(ftp_has_ctrl(alt)) {
+        failf(data, "Control byte in FTP alternative-to-user command");
+        result = CURLE_BAD_FUNCTION_ARGUMENT;
+      }
+      else {
+        result = Curl_pp_sendf(data, &ftpc->pp, "%s", alt);
+        if(!result) {
+          ftpc->ftp_trying_alternative = TRUE;
+          ftp_state(data, ftpc, FTP_USER);
+        }
       }
     }
     else {
@@ -3634,9 +3659,10 @@ static void ftp_done_wildcard(struct Curl_easy *data, struct ftp_conn *ftpc)
 {
   if(data->state.wildcardmatch) {
     if(data->set.chunk_end && ftpc->file) {
-      Curl_set_in_callback(data, TRUE);
+      struct Curl_mapi_guard guard;
+      CURL_CBAPI_START(&guard, data, easy_chunk_end);
       data->set.chunk_end(data->set.wildcardptr);
-      Curl_set_in_callback(data, FALSE);
+      CURL_CBAPI_END(&guard);
       freedirs(ftpc);
     }
     ftpc->known_filesize = -1;
@@ -4077,11 +4103,12 @@ static CURLcode wc_statemach(struct Curl_easy *data,
       infof(data, "Wildcard - START of \"%s\"", finfo->filename);
       if(data->set.chunk_bgn) {
         long userresponse;
-        Curl_set_in_callback(data, TRUE);
+        struct Curl_mapi_guard guard;
+        CURL_CBAPI_START(&guard, data, easy_chunk_bgn);
         userresponse = data->set.chunk_bgn(
           finfo, data->set.wildcardptr,
           (int)Curl_llist_count(&wildcard->filelist));
-        Curl_set_in_callback(data, FALSE);
+        CURL_CBAPI_END(&guard);
         switch(userresponse) {
         case CURL_CHUNK_BGN_FUNC_SKIP:
           infof(data, "Wildcard - \"%s\" skipped by user", finfo->filename);
@@ -4119,9 +4146,10 @@ static CURLcode wc_statemach(struct Curl_easy *data,
 
     case CURLWC_SKIP: {
       if(data->set.chunk_end) {
-        Curl_set_in_callback(data, TRUE);
+        struct Curl_mapi_guard guard;
+        CURL_CBAPI_START(&guard, data, easy_chunk_end);
         data->set.chunk_end(data->set.wildcardptr);
-        Curl_set_in_callback(data, FALSE);
+        CURL_CBAPI_END(&guard);
       }
       Curl_node_remove(Curl_llist_head(&wildcard->filelist));
       wildcard->state = (Curl_llist_count(&wildcard->filelist) == 0) ?
@@ -4449,7 +4477,7 @@ static CURLcode ftp_setup_connection(struct Curl_easy *data,
   return result;
 }
 
-bool ftp_conns_match(struct connectdata *needle, struct connectdata *conn)
+bool Curl_ftp_conns_match(struct connectdata *needle, struct connectdata *conn)
 {
   struct ftp_conn *nftpc = Curl_conn_meta_get(needle, CURL_META_FTP_CONN);
   struct ftp_conn *cftpc = Curl_conn_meta_get(conn, CURL_META_FTP_CONN);

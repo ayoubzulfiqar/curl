@@ -32,7 +32,6 @@ struct Curl_peer;
 struct Curl_str;
 
 enum alpnid Curl_alpn2alpnid(const unsigned char *name, size_t len);
-enum alpnid Curl_str2alpnid(const struct Curl_str *cstr);
 
 /* generic function that returns how much time there is left to run, according
    to the timeouts set */
@@ -59,7 +58,7 @@ timediff_t Curl_conn_shutdown_timeleft(struct Curl_easy *data,
 void Curl_shutdown_clear(struct Curl_easy *data, int sockindex);
 
 /* TRUE iff shutdown has been started */
-bool Curl_shutdown_started(struct Curl_easy *data, int sockindex);
+bool Curl_shutdown_started(struct connectdata *conn, int sockindex);
 
 /*
  * Used to extract socket and connectdata struct for the most recent
