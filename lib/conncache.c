@@ -367,6 +367,22 @@ static struct connectdata *cpool_get_oldest_idle(struct cpool *cpool,
   return oldest_idle;
 }
 
+/* Evict an idle connection to make room in the pool. A pool owned by
+ * a share has no multi that could perform a controlled shutdown of the
+ * connection; terminate it right away. Otherwise, hand it to the
+ * transfer's multi for shutdown. Expects the pool to be locked. */
+static void cpool_evict_conn(struct cpool *cpool,
+                             struct Curl_easy *data,
+                             struct connectdata *conn)
+{
+  if(cpool->share) {
+    cpool_remove_conn(cpool, conn);
+    Curl_cshutdn_terminate(cpool->idata, conn, TRUE);
+  }
+  else
+    Curl_conn_terminate(data, conn, FALSE);
+}
+
 int Curl_cpool_check_limits(struct Curl_easy *data,
                             struct connectdata *conn)
 {
@@ -380,9 +396,10 @@ int Curl_cpool_check_limits(struct Curl_easy *data,
   if(!cpool)
     return CPOOL_LIMIT_OK;
 
-  if(cpool->idata->multi) {
-    dest_limit = cpool->idata->multi->max_host_connections;
-    total_limit = cpool->idata->multi->max_total_connections;
+  /* multi determines the limits, no matter who owns the pool */
+  if(data->multi) {
+    dest_limit = data->multi->max_host_connections;
+    total_limit = data->multi->max_total_connections;
   }
 
   if(!dest_limit && !total_limit)
@@ -416,13 +433,13 @@ int Curl_cpool_check_limits(struct Curl_easy *data,
                    " from %zu to reach destination limit of %zu",
                    oldest_idle->connection_id,
                    Curl_llist_count(&bundle->conns), dest_limit);
-        Curl_conn_terminate(cpool->idata, oldest_idle, FALSE);
+        cpool_evict_conn(cpool, data, oldest_idle);
 
         /* in case the bundle was destroyed in disconnect, look it up again */
         bundle = cpool_find_bundle(cpool, conn);
         live = bundle ? Curl_llist_count(&bundle->conns) : 0;
       }
-      shutdowns = Curl_cshutdn_dest_count(cpool->idata, conn->destination);
+      shutdowns = Curl_cshutdn_dest_count(data, conn->destination);
     }
     if((live + shutdowns) >= dest_limit) {
       res = CPOOL_LIMIT_DEST;
@@ -431,7 +448,7 @@ int Curl_cpool_check_limits(struct Curl_easy *data,
   }
 
   if(total_limit) {
-    shutdowns = Curl_cshutdn_count(cpool->idata);
+    shutdowns = Curl_cshutdn_count(data);
     while((cpool->num_conn + shutdowns) >= total_limit) {
       if(shutdowns) {
         /* close one connection in shutdown right away, if we can */
@@ -448,9 +465,9 @@ int Curl_cpool_check_limits(struct Curl_easy *data,
                    FMT_OFF_T " from %zu to reach total "
                    "limit of %zu",
                    oldest_idle->connection_id, cpool->num_conn, total_limit);
-        Curl_conn_terminate(cpool->idata, oldest_idle, FALSE);
+        cpool_evict_conn(cpool, data, oldest_idle);
       }
-      shutdowns = Curl_cshutdn_count(cpool->idata);
+      shutdowns = Curl_cshutdn_count(data);
     }
     if((cpool->num_conn + shutdowns) >= total_limit) {
       res = CPOOL_LIMIT_TOTAL;
@@ -582,7 +599,7 @@ bool Curl_cpool_conn_now_idle(struct Curl_easy *data,
       oldest_idle = cpool_get_oldest_idle(cpool, Curl_pgrs_now(data));
       kept = (oldest_idle != conn);
       if(oldest_idle) {
-        Curl_conn_terminate(data, oldest_idle, FALSE);
+        cpool_evict_conn(cpool, data, oldest_idle);
       }
     }
     if(do_lock)
@@ -687,6 +704,7 @@ void Curl_conn_terminate(struct Curl_easy *data,
 struct cpool_reaper_ctx {
   size_t checked;
   size_t reaped;
+  struct curltime now;
 };
 
 static int cpool_reap_dead_cb(struct Curl_easy *data,
@@ -697,7 +715,7 @@ static int cpool_reap_dead_cb(struct Curl_easy *data,
 
   if(!terminate) {
     reaper->checked++;
-    terminate = Curl_conn_seems_dead(conn, data);
+    terminate = Curl_conn_seems_dead(conn, data, &reaper->now);
   }
   if(terminate) {
     /* stop the iteration here, pass back the connection that was pruned */
@@ -718,17 +736,19 @@ static int cpool_reap_dead_cb(struct Curl_easy *data,
 void Curl_cpool_prune_dead(struct Curl_easy *data)
 {
   struct cpool *cpool = cpool_get_instance(data);
-  struct cpool_reaper_ctx reaper;
   timediff_t elapsed;
 
   if(!cpool)
     return;
 
-  memset(&reaper, 0, sizeof(reaper));
   CPOOL_LOCK(cpool, data);
   elapsed = curlx_ptimediff_ms(Curl_pgrs_now(data), &cpool->last_cleanup);
 
   if(elapsed >= 1000L) {
+    struct cpool_reaper_ctx reaper;
+
+    memset(&reaper, 0, sizeof(reaper));
+    reaper.now = *Curl_pgrs_now(data);
     while(cpool_foreach(data, cpool, &reaper, cpool_reap_dead_cb))
       ;
     cpool->last_cleanup = *Curl_pgrs_now(data);

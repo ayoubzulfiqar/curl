@@ -23,6 +23,7 @@
  * SPDX-License-Identifier: curl
  *
  ***************************************************************************/
+#include "api.h"
 #include "llist.h"
 #include "hash.h"
 #include "conncache.h"
@@ -73,6 +74,11 @@ typedef enum {
 #if !defined(CURL_DISABLE_SOCKETPAIR) && !defined(USE_WINSOCK)
 #define ENABLE_WAKEUP
 #endif
+#if !defined(CURL_DISABLE_SOCKETPAIR) && \
+    defined(USE_RESOLV_THREADED) && \
+    !defined(USE_WINSOCK)
+#define ENABLE_INTERNAL_WAKEUP
+#endif
 
 /* value for MAXIMUM CONCURRENT STREAMS upper limit */
 #define INITIAL_MAX_CONCURRENT_STREAMS ((1U << 31) - 1)
@@ -80,14 +86,14 @@ typedef enum {
 /* This is the struct known as CURLM on the outside */
 struct Curl_multi {
   /* First a simple identifier to easier detect if a user mix up
-     this multi handle with an easy handle. Set this to CURL_MULTI_HANDLE. */
-  unsigned int magic;
+     this multi handle with an easy handle.
+     Set this to CURLMULTI_MAGIC_NUMBER. */
+  uint32_t magic;
+  uint32_t xfers_alive; /* amount of added transfers that have
+                           not yet reached COMPLETE state */
+  uint32_t xfers_really_alive; /* amount of added transfers that have
+                                  passed INIT state but are not COMPLETE yet */
 
-  unsigned int xfers_alive; /* amount of added transfers that have
-                               not yet reached COMPLETE state */
-  unsigned int xfers_really_alive; /* amount of added transfers that have
-                               passed INIT state but are not COMPLETE yet */
-  curl_off_t xfers_total_ever; /* total of added transfers, ever. */
   struct uint32_tbl xfers; /* transfers added to this multi */
   /* Each transfer's mid may be present in at most one of these */
   struct uint32_bset process; /* transfer being processed */
@@ -95,7 +101,11 @@ struct Curl_multi {
   struct uint32_bset pending; /* transfers in waiting (conn limit etc.) */
   struct uint32_bset msgsent; /* transfers done with message for application */
 
+  struct Curl_mapi_stack callstack; /* multi api calls ongoing */
+
   struct Curl_llist msglist; /* a list of messages from completed transfers */
+
+  curl_off_t xfers_total_ever; /* total of added transfers, ever. */
 
   struct Curl_easy *admin; /* internal easy handle for admin operations.
                               gets assigned `mid` 0 on multi init */
@@ -168,7 +178,13 @@ struct Curl_multi {
 #ifdef ENABLE_WAKEUP
   curl_socket_t wakeup_pair[2]; /* eventfd()/pipe()/socketpair() used for
                                    wakeup 0 is used for read, 1 is used
-                                   for write */
+                                   for write. Used by curl_multi_wakeup() */
+#endif
+#ifdef ENABLE_INTERNAL_WAKEUP
+  curl_socket_t wakeup_internal[2]; /* eventfd()/pipe()/socketpair() used for
+                                   wakeup 0 is used for read, 1 is used
+                                   for write. Used for internal wakeups,
+                                   e.g. threaded resolver. */
 #endif
   unsigned int max_concurrent_streams;
   unsigned int maxconnects; /* if >0, a fixed limit of the maximum number of
@@ -182,8 +198,6 @@ struct Curl_multi {
   BIT(ipv6_works);
   BIT(multiplexing);           /* multiplexing wanted */
   BIT(recheckstate);           /* see Curl_multi_connchanged */
-  BIT(in_callback);            /* true while executing a callback */
-  BIT(in_ntfy_callback);       /* true while dispatching notifications */
 #ifdef USE_OPENSSL
   BIT(ssl_seeded);
 #endif

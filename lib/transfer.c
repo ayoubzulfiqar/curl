@@ -51,7 +51,7 @@
 #endif
 
 #ifndef HAVE_SOCKET
-#error "We cannot compile without socket() support!"
+#error "We cannot compile without socket() support"
 #endif
 
 #include "urldata.h"
@@ -155,7 +155,7 @@ static bool xfer_recv_shutdown_started(struct Curl_easy *data)
 {
   if(!data || !data->conn)
     return FALSE;
-  return Curl_shutdown_started(data, data->conn->recv_idx);
+  return Curl_shutdown_started(data->conn, data->conn->recv_idx);
 }
 
 CURLcode Curl_xfer_send_shutdown(struct Curl_easy *data, bool *done)
@@ -250,8 +250,7 @@ static CURLcode sendrecv_dl(struct Curl_easy *data,
     bytestoread = xfer_blen;
 
     if(bytestoread && Curl_rlimit_active(&data->progress.dl.rlimit)) {
-      curl_off_t dl_avail = Curl_rlimit_avail(&data->progress.dl.rlimit,
-                                              Curl_pgrs_now(data));
+      curl_off_t dl_avail = Curl_rlimit_avail(&data->progress.dl.rlimit, NULL);
 #if 0
       DEBUGF(infof(data, "dl_rlimit, available=%" FMT_OFF_T, dl_avail));
 #endif

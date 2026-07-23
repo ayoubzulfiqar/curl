@@ -50,7 +50,7 @@
 #include "vtls/x509asn1.h"
 #include "system_win32.h"
 #include "curlx/version_win32.h"
-#include "rand.h"
+#include "curlx/winapi.h"
 #include "curlx/strparse.h"
 #include "progress.h"
 #include "curl_sha256.h"
@@ -316,34 +316,35 @@ static CURLcode get_cert_location(TCHAR *path, DWORD *store_name,
   TCHAR *store_path_start;
   size_t store_name_len;
 
-  sep = _tcschr(path, TEXT('\\'));
+  sep = _tcschr(path, _TEXT('\\'));
   if(!sep)
     return CURLE_SSL_CERTPROBLEM;
 
   store_name_len = sep - path;
 
-  if(_tcsncmp(path, TEXT("CurrentUser"), store_name_len) == 0)
+  if(_tcsncmp(path, _TEXT("CurrentUser"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_CURRENT_USER;
-  else if(_tcsncmp(path, TEXT("LocalMachine"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("LocalMachine"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_LOCAL_MACHINE;
-  else if(_tcsncmp(path, TEXT("CurrentService"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("CurrentService"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_CURRENT_SERVICE;
-  else if(_tcsncmp(path, TEXT("Services"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("Services"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_SERVICES;
-  else if(_tcsncmp(path, TEXT("Users"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("Users"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_USERS;
-  else if(_tcsncmp(path, TEXT("CurrentUserGroupPolicy"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("CurrentUserGroupPolicy"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_CURRENT_USER_GROUP_POLICY;
-  else if(_tcsncmp(path, TEXT("LocalMachineGroupPolicy"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("LocalMachineGroupPolicy"), store_name_len) ==
+          0)
     *store_name = CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY;
-  else if(_tcsncmp(path, TEXT("LocalMachineEnterprise"), store_name_len) == 0)
+  else if(_tcsncmp(path, _TEXT("LocalMachineEnterprise"), store_name_len) == 0)
     *store_name = CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE;
   else
     return CURLE_SSL_CERTPROBLEM;
 
   store_path_start = sep + 1;
 
-  sep = _tcschr(store_path_start, TEXT('\\'));
+  sep = _tcschr(store_path_start, _TEXT('\\'));
   if(!sep)
     return CURLE_SSL_CERTPROBLEM;
 
@@ -351,9 +352,9 @@ static CURLcode get_cert_location(TCHAR *path, DWORD *store_name,
   if(_tcslen(*thumbprint) != CERT_THUMBPRINT_STR_LEN)
     return CURLE_SSL_CERTPROBLEM;
 
-  *sep = TEXT('\0');
+  *sep = _TEXT('\0');
   *store_path = curlx_tcsdup(store_path_start);
-  *sep = TEXT('\\');
+  *sep = _TEXT('\\');
   if(!*store_path)
     return CURLE_OUT_OF_MEMORY;
 
@@ -452,8 +453,7 @@ static CURLcode get_client_cert(struct Curl_cfilter *cf,
           continue_reading = fseek(fInCert, 0, SEEK_SET) == 0;
         if(continue_reading && (certsize < CURL_MAX_INPUT_LENGTH))
           certdata = curlx_malloc(certsize + 1);
-        if((!certdata) ||
-           ((int) fread(certdata, certsize, 1, fInCert) != 1))
+        if(!certdata || ((int)fread(certdata, certsize, 1, fInCert) != 1))
           continue_reading = FALSE;
         curlx_fclose(fInCert);
         if(!continue_reading) {
@@ -474,10 +474,8 @@ static CURLcode get_client_cert(struct Curl_cfilter *cf,
       if(pszPassword) {
         int str_w_len = 0;
         if(pwd_len > 0)
-          str_w_len = MultiByteToWideChar(CP_UTF8,
-                                          MB_ERR_INVALID_CHARS,
-                                          sslc->key_passwd,
-                                          (int)pwd_len,
+          str_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                          sslc->key_passwd, (int)pwd_len,
                                           pszPassword, (int)(pwd_len + 1));
 
         if((str_w_len >= 0) && (str_w_len <= (int)pwd_len))
@@ -594,11 +592,10 @@ static CURLcode acquire_sspi_handle(struct Curl_cfilter *cf,
   SECURITY_STATUS sspi_status = SEC_E_OK;
   CURLcode result;
 
-  /* We support TLS 1.3 starting in Windows 10 version 1809 (OS build 17763) as
-     long as the user did not set a legacy algorithm list
-     (CURLOPT_SSL_CIPHER_LIST). */
+  /* We support TLS 1.3 starting in Windows Server 2022 or later
+   * (OS build 20348) */
   if(!conn_config->cipher_list &&
-     curlx_verify_windows_version(10, 0, 17763, PLATFORM_WINNT,
+     curlx_verify_windows_version(10, 0, 20348, PLATFORM_WINNT,
                                   VERSION_GREATER_THAN_EQUAL)) {
 
     SCH_CREDENTIALS credentials = { 0 };
@@ -1596,7 +1593,7 @@ static CURLcode schannel_connect_step3(struct Curl_cfilter *cf,
   SecPkgContext_ApplicationProtocol alpn_result;
 #endif
 
-  DEBUGASSERT(ssl_connect_3 == connssl->connecting_state);
+  DEBUGASSERT(connssl->connecting_state == ssl_connect_3);
   DEBUGASSERT(backend);
 
   DEBUGF(infof(data, "schannel: SSL/TLS connection with %s port %d (step 3/3)",
@@ -1721,25 +1718,25 @@ static CURLcode schannel_connect(struct Curl_cfilter *cf,
 
   *done = FALSE;
 
-  if(ssl_connect_1 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_1) {
     result = schannel_connect_step1(cf, data);
     if(result)
       return result;
   }
 
-  if(ssl_connect_2 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_2) {
     result = schannel_connect_step2(cf, data);
     if(result)
       return result;
   }
 
-  if(ssl_connect_3 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_3) {
     result = schannel_connect_step3(cf, data);
     if(result)
       return result;
   }
 
-  if(ssl_connect_done == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_done) {
     connssl->state = ssl_connection_complete;
 
 #ifdef SECPKG_ATTR_ENDPOINT_BINDINGS  /* mingw-w64 v9+, MS SDK 7.0A/VS2010+ */
@@ -2640,7 +2637,7 @@ static CURLcode schannel_random(struct Curl_easy *data,
 {
   (void)data;
 
-  return Curl_win32_random(entropy, length);
+  return curlx_win32_random(entropy, length);
 }
 
 static CURLcode schannel_checksum(const unsigned char *input,

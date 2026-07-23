@@ -41,10 +41,10 @@ env:
 jobs:
   linux-glibc-gcc:
     name: 'Linux gcc glibc (amd64, arm64)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -70,10 +70,10 @@ jobs:
 
   linux-glibc-gcc-minimal:  # use gcc to minimize installed packages
     name: 'Linux gcc glibc minimal (amd64)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -97,10 +97,10 @@ jobs:
 
   linux-musl-llvm:
     name: 'Linux llvm MUSL (amd64, riscv64)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -131,7 +131,7 @@ jobs:
     env:
       CW_JOBS: '4'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -146,10 +146,13 @@ jobs:
 
   win-llvm:
     name: 'Windows llvm (x64)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
+    env:
+      CW_PKG_NODELETE: '1'
+      CW_PKG_FLATTEN: '1'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -171,12 +174,18 @@ jobs:
             "${OCI_IMAGE_DEBIAN}" \
             sh -c ./_ci-linux-debian.sh
 
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: 'curl-windows-snapshot-tool'
+          retention-days: 5
+          path: curl-*-*-*/curl*
+
   win-gcc-zlibold-x64:
     name: 'Windows gcc zlib-classic (x64)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           path: 'curl'
@@ -185,7 +194,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/curl/curl-for-win
           mv curl-for-win/* .
-          export CW_CONFIG='-main-werror-unitybatch-nocertdata-win-x64-gcc-zlibold-noWINE'
+          export CW_CONFIG='-main-werror-unitybatch-nocertdata-curltests-win-x64-gcc-zlibold-noWINE'
           export CW_REVISION="${GITHUB_SHA}"
           . ./_versions.sh
           sudo podman image trust set --type reject default
