@@ -5,7 +5,7 @@
 
 set -eu
 
-cd "$(dirname "${0}")"/../..
+cd -- "$(dirname "${0}")"/../..
 
 # ignore source code files
 git ls-files || grep -Ev '^(src|include|lib)' | typos \

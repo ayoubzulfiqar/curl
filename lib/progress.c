@@ -172,10 +172,8 @@ UNITTEST CURLcode pgrs_speedcheck(struct Curl_easy *data,
 
 const struct curltime *Curl_pgrs_now(struct Curl_easy *data)
 {
-  struct curltime *pnow = data->multi ?
-                          &data->multi->now : &data->progress.now;
-  curlx_pnow(pnow);
-  return pnow;
+  curlx_pnow(&data->progress.now);
+  return &data->progress.now;
 }
 
 /*
@@ -337,7 +335,7 @@ void Curl_pgrsTimeWas(struct Curl_easy *data, timerid timer,
     if(us < 1)
       us = 1; /* make sure at least one microsecond passed */
     *delta += us;
-    CURL_TRC_M(data, "[%s] added %" FMT_TIMEDIFF_T "ns",
+    CURL_TRC_M(data, "[%s] added %" FMT_TIMEDIFF_T "us",
                pgrs_timer_name(timer), us);
   }
   else
@@ -392,7 +390,7 @@ void Curl_pgrs_download_inc(struct Curl_easy *data, size_t delta)
 {
   if(delta) {
     data->progress.dl.cur_size += delta;
-    Curl_rlimit_drain(&data->progress.dl.rlimit, delta, Curl_pgrs_now(data));
+    Curl_rlimit_drain(&data->progress.dl.rlimit, delta, NULL);
   }
 }
 
@@ -400,7 +398,7 @@ void Curl_pgrs_upload_inc(struct Curl_easy *data, size_t delta)
 {
   if(delta) {
     data->progress.ul.cur_size += delta;
-    Curl_rlimit_drain(&data->progress.ul.rlimit, delta, Curl_pgrs_now(data));
+    Curl_rlimit_drain(&data->progress.ul.rlimit, delta, NULL);
   }
 }
 
@@ -661,13 +659,14 @@ static CURLcode pgrsupdate(struct Curl_easy *data, bool showprogress)
     int rc;
     if(data->set.fxferinfo) {
       /* There is a callback set, call that */
-      Curl_set_in_callback(data, TRUE);
+      struct Curl_mapi_guard guard;
+      CURL_CBAPI_START(&guard, data, easy_fxferinfo);
       rc = data->set.fxferinfo(data->set.progress_client,
                                data->progress.dl.total_size,
                                data->progress.dl.cur_size,
                                data->progress.ul.total_size,
                                data->progress.ul.cur_size);
-      Curl_set_in_callback(data, FALSE);
+      CURL_CBAPI_END(&guard);
       if(rc != CURL_PROGRESSFUNC_CONTINUE) {
         if(rc) {
           failf(data, "Callback aborted");
@@ -678,13 +677,14 @@ static CURLcode pgrsupdate(struct Curl_easy *data, bool showprogress)
     }
     else if(data->set.fprogress) {
       /* The older deprecated callback is set, call that */
-      Curl_set_in_callback(data, TRUE);
+      struct Curl_mapi_guard guard;
+      CURL_CBAPI_START(&guard, data, easy_fprogress);
       rc = data->set.fprogress(data->set.progress_client,
                                (double)data->progress.dl.total_size,
                                (double)data->progress.dl.cur_size,
                                (double)data->progress.ul.total_size,
                                (double)data->progress.ul.cur_size);
-      Curl_set_in_callback(data, FALSE);
+      CURL_CBAPI_END(&guard);
       if(rc != CURL_PROGRESSFUNC_CONTINUE) {
         if(rc) {
           failf(data, "Callback aborted");

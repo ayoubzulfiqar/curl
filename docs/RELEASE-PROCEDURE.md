@@ -97,14 +97,14 @@ pending release:
 - Release candidate two (**rc2**) ships nine days later, sixteen days before
   the release. On a Monday. Tagged like `rc-7_34_0-2`.
 
-- Release candidate tree (**rc3**) ships nine days later, seven days before
+- Release candidate three (**rc3**) ships nine days later, seven days before
   the release. On a Wednesday. Tagged like `rc-7_34_0-3`.
 
 Release candidate tarballs are ephemeral and each such tarball is only kept
 around for a few weeks. They are provided on their dedicated webpage at:
 https://curl.se/rc/
 
-The git tags for release candidate are temporary and remain set only for a
+The git tags for release candidates are temporary and remain set only for a
 limited period of time.
 
 **Do not use release candidates in production**. They are work in progress.

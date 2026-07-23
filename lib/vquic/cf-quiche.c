@@ -40,6 +40,7 @@
 #include "connect.h"
 #include "progress.h"
 #include "select.h"
+#include "http.h"
 #include "http1.h"
 #include "sockaddr.h"
 #include "vquic/vquic.h"
@@ -135,7 +136,7 @@ static void cf_quiche_ctx_free(struct cf_quiche_ctx *ctx)
     ctx->tls.ossl.ssl = NULL;
     Curl_vquic_tls_cleanup(&ctx->tls);
     Curl_ssl_peer_cleanup(&ctx->ssl_peer);
-    vquic_ctx_free(&ctx->q);
+    Curl_vquic_ctx_free(&ctx->q);
     Curl_uint32_hash_destroy(&ctx->streams);
     curlx_dyn_free(&ctx->h1hdr);
     Curl_bufq_free(&ctx->writebuf);
@@ -253,7 +254,6 @@ static bool cf_quiche_do_expire(struct Curl_cfilter *cf,
                                 struct h3_stream_ctx *stream,
                                 void *user_data)
 {
-  (void)stream;
   (void)user_data;
   CURL_TRC_CF(sdata, cf, "conn closed, mark as dirty");
   stream->xfer_result = CURLE_SEND_ERROR;
@@ -579,7 +579,7 @@ static void cf_quiche_process_ev(struct Curl_cfilter *cf,
   }
 }
 
-struct cf_quich_disp_ctx {
+struct cf_quiche_disp_ctx {
   uint64_t stream_id;
   struct Curl_cfilter *cf;
   struct Curl_multi *multi;
@@ -588,7 +588,7 @@ struct cf_quich_disp_ctx {
 
 static bool cf_quiche_disp_event(uint32_t mid, void *val, void *user_data)
 {
-  struct cf_quich_disp_ctx *dctx = user_data;
+  struct cf_quiche_disp_ctx *dctx = user_data;
   struct h3_stream_ctx *stream = val;
 
   if(stream->id == dctx->stream_id) {
@@ -629,7 +629,7 @@ static CURLcode cf_poll_events(struct Curl_cfilter *cf,
       else {
         /* another transfer, do not return errors, as they are not for
          * the calling transfer */
-        struct cf_quich_disp_ctx dctx;
+        struct cf_quiche_disp_ctx dctx;
         dctx.stream_id = (uint64_t)rv;
         dctx.cf = cf;
         dctx.multi = data->multi;
@@ -726,8 +726,8 @@ static CURLcode cf_process_ingress(struct Curl_cfilter *cf,
   rctx.data = data;
   rctx.pkts = 0;
 
-  result = vquic_recv_packets(cf, data, &ctx->q, 1000,
-                              cf_quiche_recv_pkts, &rctx);
+  result = Curl_vquic_recv_packets(cf, data, &ctx->q, 1000,
+                                   cf_quiche_recv_pkts, &rctx);
   if(result)
     return result;
 
@@ -796,7 +796,7 @@ static CURLcode cf_flush_egress(struct Curl_cfilter *cf,
     }
   }
 
-  result = vquic_flush(cf, data, &ctx->q);
+  result = Curl_vquic_flush(cf, data, &ctx->q);
   if(result) {
     if(result == CURLE_AGAIN) {
       Curl_expire(data, 1, EXPIRE_QUIC);
@@ -818,7 +818,7 @@ static CURLcode cf_flush_egress(struct Curl_cfilter *cf,
       if(result != CURLE_AGAIN)
         return result;
       /* Nothing more to add, flush and leave */
-      result = vquic_send(cf, data, &ctx->q, gsolen);
+      result = Curl_vquic_send(cf, data, &ctx->q, gsolen);
       if(result) {
         if(result == CURLE_AGAIN) {
           Curl_expire(data, 1, EXPIRE_QUIC);
@@ -831,7 +831,7 @@ static CURLcode cf_flush_egress(struct Curl_cfilter *cf,
 
     ++pkt_count;
     if(nread < gsolen || pkt_count >= MAX_PKT_BURST) {
-      result = vquic_send(cf, data, &ctx->q, gsolen);
+      result = Curl_vquic_send(cf, data, &ctx->q, gsolen);
       if(result) {
         if(result == CURLE_AGAIN) {
           Curl_expire(data, 1, EXPIRE_QUIC);
@@ -874,12 +874,12 @@ static CURLcode recv_closed_stream(struct Curl_cfilter *cf,
         CURL_TRC_CF(data, cf, "[%" PRIu64 "] error after response headers, "
                     "but we did not want a body anyway, ignore error 0x%"
                     PRIx64 " %s", stream->id, stream->error3,
-                    vquic_h3_err_str(stream->error3));
+                    Curl_vquic_h3_err_str(stream->error3));
         return CURLE_OK;
     }
     failf(data, "HTTP/3 stream %" PRIu64 " reset by server (error 0x%" PRIx64
           " %s)", stream->id, stream->error3,
-          vquic_h3_err_str(stream->error3));
+          Curl_vquic_h3_err_str(stream->error3));
     result = data->req.bytecount ? CURLE_PARTIAL_FILE : CURLE_HTTP3;
     CURL_TRC_CF(data, cf, "[%" PRIu64 "] cf_recv, was reset -> %d",
                 stream->id, (int)result);
@@ -903,7 +903,7 @@ static CURLcode cf_quiche_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   *pnread = 0;
   (void)buf;
   (void)blen;
-  vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
+  Curl_vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
 
   if(!stream)
     return CURLE_RECV_ERROR;
@@ -1114,7 +1114,7 @@ static CURLcode cf_quiche_send(struct Curl_cfilter *cf, struct Curl_easy *data,
   CURLcode result;
 
   *pnwritten = 0;
-  vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
+  Curl_vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
 
   result = cf_process_ingress(cf, data);
   if(result)
@@ -1140,7 +1140,7 @@ static CURLcode cf_quiche_send(struct Curl_cfilter *cf, struct Curl_easy *data,
        * sending the 30x response.
        * This is sort of a race: had the transfer loop called recv first,
        * it would see the response and stop/discard sending on its own- */
-      CURL_TRC_CF(data, cf, "[%" PRIu64 "] discarding data"
+      CURL_TRC_CF(data, cf, "[%" PRIu64 "] discarding data "
                   "on closed stream with response", stream->id);
       result = CURLE_OK;
       *pnwritten = len;
@@ -1272,7 +1272,7 @@ static CURLcode cf_quiche_ctx_open(struct Curl_cfilter *cf,
   DEBUGASSERT(ctx->q.sockfd != CURL_SOCKET_BAD);
   DEBUGASSERT(ctx->initialized);
 
-  result = vquic_ctx_init(data, &ctx->q);
+  result = Curl_vquic_ctx_init(data, &ctx->q);
   if(result)
     return result;
 
@@ -1397,7 +1397,7 @@ static CURLcode cf_quiche_connect(struct Curl_cfilter *cf,
     return CURLE_OK;
   }
 
-  vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
+  Curl_vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
 
   if(!ctx->qconn) {
     result = cf_quiche_ctx_open(cf, data);
@@ -1429,6 +1429,10 @@ static CURLcode cf_quiche_connect(struct Curl_cfilter *cf,
         result = CURLE_OUT_OF_MEMORY;
         goto out;
       }
+      /* quiche 0.29.3+ rejects response headers larger than 32 KiB by
+         default. Allow as much as curl itself accepts. */
+      quiche_h3_config_set_max_field_section_size(ctx->h3config,
+                                                  MAX_HTTP_RESP_HEADER_SIZE);
 
       /* Create a new HTTP/3 connection on the QUIC connection. */
       ctx->h3c = quiche_h3_conn_new_with_transport(ctx->qconn, ctx->h3config);
@@ -1479,7 +1483,7 @@ static CURLcode cf_quiche_shutdown(struct Curl_cfilter *cf,
     int err;
 
     ctx->shutdown_started = TRUE;
-    vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
+    Curl_vquic_ctx_update_time(&ctx->q, Curl_pgrs_now(data));
     err = quiche_conn_close(ctx->qconn, TRUE, 0, NULL, 0);
     if(err) {
       CURL_TRC_CF(data, cf, "error %d adding shutdown packet, "
@@ -1497,8 +1501,8 @@ static CURLcode cf_quiche_shutdown(struct Curl_cfilter *cf,
   }
 
   if(Curl_bufq_is_empty(&ctx->q.sendbuf)) {
-    /* sent everything, quiche does not seem to support a graceful
-     * shutdown waiting for a reply, so ware done. */
+    /* sent everything, quiche does not seem to support a graceful shutdown
+     * waiting for a reply, so we are done. */
     CURL_TRC_CF(data, cf, "shutdown completely sent off, done");
     *done = TRUE;
   }

@@ -120,8 +120,11 @@ struct async_ares_ctx {
   CURLcode result;               /* CURLE_OK or error handling response */
   struct curltime happy_eyeballs_dns_time; /* when this timer started, or 0 */
 #ifdef USE_HTTPSRR
-  struct Curl_https_rrinfo hinfo;
+  char *https_name;
+  struct Curl_https_rrinfo *hinfo;
 #endif
+  BIT(transient_err); /* an A/AAAA query failed without the resolver
+                         answering that the name does not exist */
 };
 
 void Curl_async_ares_shutdown(struct Curl_easy *data,
@@ -137,12 +140,13 @@ struct async_thrdd_item;
 
 /* Context for threaded resolver */
 struct async_thrdd_ctx {
-  struct async_thrdd_item *res_A; /* ipv4 result */
-  struct async_thrdd_item *res_AAAA; /* ipv6 result */
+  struct async_thrdd_item *res_A; /* IPv4 result */
+  struct async_thrdd_item *res_AAAA; /* IPv6 result */
 #if defined(USE_HTTPSRR) && defined(USE_ARES)
   struct {
     ares_channel channel;
-    struct Curl_https_rrinfo hinfo;
+    char *https_name;
+    struct Curl_https_rrinfo *hinfo;
   } rr;
 #endif
 };
@@ -251,6 +255,10 @@ struct Curl_resolv_async {
   BIT(for_proxy);
   BIT(done);
   BIT(shutdown);
+  BIT(negative_answer); /* resolver answered that the name does not
+                           exist. Only such failures may be cached as
+                           negative entries, not transient or local
+                           resolver failures. */
   char hostname[1];
 };
 

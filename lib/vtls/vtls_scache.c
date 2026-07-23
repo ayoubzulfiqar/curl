@@ -44,15 +44,13 @@
 #include "curl_trc.h"
 #include "curl_sha256.h"
 #include "rand.h"
-
+#include "curlx/strdup.h"
 
 /* a peer+tls-config we cache sessions for */
 struct Curl_ssl_scache_peer {
   char *ssl_peer_key;      /* id for peer + relevant TLS configuration */
   char *clientcert;
   char *key_passwd;
-  char *srp_username;
-  char *srp_password;
   struct Curl_llist sessions;
   void *sobj;              /* object instance or NULL */
   Curl_ssl_scache_obj_dtor *sobj_free; /* free `sobj` callback */
@@ -78,9 +76,13 @@ static CURLcode cf_ssl_peer_key_add_path(struct dynbuf *buf,
      * when used in another process with different CWD. When a path does not
      * exist, this does not work. Then, we add the path as is. */
 #ifdef _WIN32
-    char abspath[_MAX_PATH];
-    if(_fullpath(abspath, path, _MAX_PATH))
-      return curlx_dyn_addf(buf, ":%s-%s", name, abspath);
+    char *abspath = _fullpath(NULL, path, 0);
+    if(abspath) {
+      CURLcode result = curlx_dyn_addf(buf, ":%s-%s", name, abspath);
+      /* !checksrc! disable BANNEDFUNC 1 */
+      free(abspath); /* allocated by CRT, use system free() */
+      return result;
+    }
     *is_local = TRUE;
 #elif defined(HAVE_REALPATH)
     if(path[0] != '/') {
@@ -321,13 +323,6 @@ static CURLcode ssl_peer_key_build(struct ssl_primary_config *ssl,
   result = cf_ssl_peer_key_add_mtls(&buf, ssl, &is_local);
   if(result)
     goto out;
-#ifdef USE_TLS_SRP
-  if(ssl->username || ssl->password) {
-    result = curlx_dyn_add(&buf, ":SRP-AUTH");
-    if(result)
-      goto out;
-  }
-#endif
 
   if(!tls_id || !tls_id[0]) {
     result = CURLE_FAILED_INIT;
@@ -389,9 +384,9 @@ static void cf_ssl_scache_session_ldestroy(void *udata, void *obj)
 {
   struct Curl_ssl_session *s = obj;
   (void)udata;
-  curlx_free(CURL_UNCONST(s->sdata));
-  curlx_free(CURL_UNCONST(s->quic_tp));
-  curlx_free((void *)s->alpn);
+  curlx_free(s->sdata);
+  curlx_free(s->quic_tp);
+  curlx_free(s->alpn);
   curlx_free(s);
 }
 
@@ -456,6 +451,54 @@ void Curl_ssl_session_destroy(struct Curl_ssl_session *s)
   }
 }
 
+CURLcode Curl_ssl_session_dup(struct Curl_ssl_session *src,
+                              struct Curl_ssl_session **pdest)
+{
+  struct Curl_ssl_session *dest = NULL;
+  CURLcode result = CURLE_OUT_OF_MEMORY;
+
+  if(!src || !pdest)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  *pdest = NULL;
+
+  dest = curlx_calloc(1, sizeof(*dest));
+  if(!dest)
+    goto out;
+
+  dest->ietf_tls_id = src->ietf_tls_id;
+  dest->valid_until = src->valid_until;
+  dest->earlydata_max = src->earlydata_max;
+  dest->sectrust_verified = src->sectrust_verified;
+  if(src->sdata_len) {
+    dest->sdata = curlx_memdup(src->sdata, src->sdata_len);
+    if(!dest->sdata)
+      goto out;
+    dest->sdata_len = src->sdata_len;
+  }
+  if(src->quic_tp_len) {
+    dest->quic_tp = curlx_memdup(src->quic_tp, src->quic_tp_len);
+    if(!dest->quic_tp)
+      goto out;
+    dest->quic_tp_len = src->quic_tp_len;
+  }
+  if(src->alpn) {
+    dest->alpn = curlx_strdup(src->alpn);
+    if(!dest->alpn)
+      goto out;
+  }
+  result = CURLE_OK;
+
+out:
+  if(!result)
+    *pdest = dest;
+  else {
+    *pdest = NULL;
+    if(dest)
+      Curl_ssl_session_destroy(dest);
+  }
+  return result;
+}
+
 static void cf_ssl_scache_clear_peer(struct Curl_ssl_scache_peer *peer)
 {
   Curl_llist_destroy(&peer->sessions, NULL);
@@ -468,10 +511,6 @@ static void cf_ssl_scache_clear_peer(struct Curl_ssl_scache_peer *peer)
   peer->sobj_free = NULL;
   curlx_safefree(peer->clientcert);
   curlx_safefree(peer->key_passwd);
-#ifdef USE_TLS_SRP
-  curlx_safefree(peer->srp_username);
-  curlx_safefree(peer->srp_password);
-#endif
   curlx_safefree(peer->ssl_peer_key);
   peer->age = 0;
   peer->hmac_set = FALSE;
@@ -497,7 +536,6 @@ static void cf_ssl_cache_peer_update(struct Curl_ssl_scache_peer *peer)
    *   imported using only the salt+hmac
    * - the peer key is global, e.g. carrying no relative paths */
   peer->exportable = (!peer->clientcert && !peer->key_passwd &&
-                      !peer->srp_username && !peer->srp_password &&
                       (!peer->ssl_peer_key ||
                        cf_ssl_peer_key_is_global(peer->ssl_peer_key)));
 }
@@ -506,8 +544,6 @@ static CURLcode cf_ssl_scache_peer_init(struct Curl_ssl_scache_peer *peer,
                                         const char *ssl_peer_key,
                                         const char *clientcert,
                                         const char *key_passwd,
-                                        const char *srp_username,
-                                        const char *srp_password,
                                         const unsigned char *salt,
                                         const unsigned char *hmac)
 {
@@ -539,17 +575,6 @@ static CURLcode cf_ssl_scache_peer_init(struct Curl_ssl_scache_peer *peer,
     if(!peer->key_passwd)
       goto out;
   }
-  if(srp_username) {
-    peer->srp_username = curlx_strdup(srp_username);
-    if(!peer->srp_username)
-      goto out;
-  }
-  if(srp_password) {
-    peer->srp_password = curlx_strdup(srp_password);
-    if(!peer->srp_password)
-      goto out;
-  }
-
   cf_ssl_cache_peer_update(peer);
   result = CURLE_OK;
 out:
@@ -682,21 +707,12 @@ static bool cf_ssl_scache_match_auth(struct Curl_ssl_scache_peer *peer,
   if(!conn_config) {
     if(peer->clientcert || peer->key_passwd)
       return FALSE;
-#ifdef USE_TLS_SRP
-    if(peer->srp_username || peer->srp_password)
-      return FALSE;
-#endif
     return TRUE;
   }
   else if(!Curl_safecmp(peer->clientcert, conn_config->clientcert))
     return FALSE;
   if(Curl_timestrcmp(peer->key_passwd, conn_config->key_passwd))
     return FALSE;
-#ifdef USE_TLS_SRP
-  if(Curl_timestrcmp(peer->srp_username, conn_config->username) ||
-     Curl_timestrcmp(peer->srp_password, conn_config->password))
-    return FALSE;
-#endif
   return TRUE;
 }
 
@@ -821,11 +837,6 @@ static CURLcode cf_ssl_add_peer(struct Curl_easy *data,
     char buffer[64];
     const char *ccert = conn_config ? conn_config->clientcert : NULL;
     const char *kpasswd = conn_config ? conn_config->key_passwd : NULL;
-    const char *username = NULL, *password = NULL;
-#ifdef USE_TLS_SRP
-    username = conn_config ? conn_config->username : NULL;
-    password = conn_config ? conn_config->password : NULL;
-#endif
     if(!ccert && conn_config && conn_config->cert_blob) {
       /* when using a client cert blob, create a name for it */
       curl_msnprintf(buffer, sizeof(buffer),
@@ -833,7 +844,7 @@ static CURLcode cf_ssl_add_peer(struct Curl_easy *data,
       ccert = buffer; /* data is strduped by cf_ssl_scache_peer_init */
     }
     result = cf_ssl_scache_peer_init(peer, ssl_peer_key, ccert, kpasswd,
-                                     username, password, NULL, NULL);
+                                     NULL, NULL);
     if(result)
       goto out;
     /* all ready */
@@ -1211,7 +1222,7 @@ CURLcode Curl_ssl_session_import(struct Curl_easy *data,
       peer = cf_ssl_get_free_peer(scache);
       if(peer) {
         result = cf_ssl_scache_peer_init(peer, ssl_peer_key, NULL, NULL,
-                                         NULL, NULL, salt, hmac);
+                                         salt, hmac);
         if(result)
           goto out;
       }

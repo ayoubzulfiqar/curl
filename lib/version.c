@@ -242,7 +242,9 @@ char *curl_version(void)
   src[i++] = gsasl_buf;
 #endif
 #ifdef HAVE_GSSAPI
-#ifdef HAVE_GSSGNU
+#ifdef HAVE_GSSAPPLE
+  curl_msnprintf(gss_buf, sizeof(gss_buf), "AppleGSS");
+#elif defined(HAVE_GSSGNU)
   curl_msnprintf(gss_buf, sizeof(gss_buf), "libgss/%s", GSS_VERSION);
 #elif defined(CURL_KRB5_VERSION)
   curl_msnprintf(gss_buf, sizeof(gss_buf), "mit-krb5/%s", CURL_KRB5_VERSION);
@@ -518,9 +520,6 @@ static const struct feat features_table[] = {
 #endif
 #ifdef GLOBAL_INIT_IS_THREADSAFE
   FEATURE("threadsafe",  NULL,                CURL_VERSION_THREADSAFE),
-#endif
-#ifdef USE_TLS_SRP
-  FEATURE("TLS-SRP",     NULL,                CURL_VERSION_TLSAUTH_SRP),
 #endif
 #if defined(_WIN32) && defined(UNICODE) && defined(_UNICODE)
   FEATURE("Unicode",     NULL,                CURL_VERSION_UNICODE),

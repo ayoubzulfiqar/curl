@@ -327,6 +327,8 @@ static unsigned char ancount_aaaa;
 static timediff_t a_delay_ms;
 static timediff_t aaaa_delay_ms;
 static timediff_t https_delay_ms;
+static unsigned char rcode_a;
+static unsigned char rcode_aaaa;
 
 static int query_id = -1;
 
@@ -444,15 +446,18 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
     0x0, 0x0  /* ARCOUNT */
   };
   uint16_t ancount = 0;
+  unsigned char rcode = 0;
 
   switch(qtype) {
   case QTYPE_A:
     ancount = ancount_a;
     delay_ms = a_delay_ms;
+    rcode = rcode_a;
     break;
   case QTYPE_AAAA:
     ancount = ancount_aaaa;
     delay_ms = aaaa_delay_ms;
+    rcode = rcode_aaaa;
     break;
   case QTYPE_HTTPS:
     if(httpsrr.dlen)
@@ -460,6 +465,8 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
     delay_ms = https_delay_ms;
     break;
   }
+  if(rcode)
+    ancount = 0;
 
   resp = curlx_calloc(1, sizeof(*resp));
   if(!resp)
@@ -478,6 +485,11 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
   header[0] = (uint8_t)(id >> 8);
   header[1] = (uint8_t)(id & 0xff);
 
+  if(rcode) {
+    header[3] = (uint8_t)((header[3] & 0xf0) | (rcode & 0x0f));
+    logmsg("[%d] response rcode %u", qid, (unsigned int)rcode);
+  }
+
   header[6] = (uint8_t)(ancount >> 8);
   header[7] = (uint8_t)(ancount & 0xff);
 
@@ -491,23 +503,27 @@ create_resp(int qid, const struct sockaddr *addr, curl_socklen_t addrlen,
 
   switch(qtype) {
   case QTYPE_A:
-    for(a = 0; a < ancount_a; a++) {
+    for(a = 0; !rcode && (a < ancount_a); a++) {
       const unsigned char *store = ipv4_pref;
+      const char *ip;
       if(add_answer(&resp->body, store, sizeof(ipv4_pref), QTYPE_A))
         goto error;
+      ip = curlx_inet_ntop(AF_INET, store, addrbuf, sizeof(addrbuf));
       logmsg("[%d] response A (%x) '%s'", qid, (unsigned int)QTYPE_A,
-             curlx_inet_ntop(AF_INET, store, addrbuf, sizeof(addrbuf)));
+             ip ? ip : "(null)");
     }
     if(!ancount_a)
       logmsg("[%d] response A empty", qid);
     break;
   case QTYPE_AAAA:
-    for(a = 0; a < ancount_aaaa; a++) {
+    for(a = 0; !rcode && (a < ancount_aaaa); a++) {
       const unsigned char *store = ipv6_pref;
+      const char *ip;
       if(add_answer(&resp->body, store, sizeof(ipv6_pref), QTYPE_AAAA))
         goto error;
+      ip = curlx_inet_ntop(AF_INET6, store, addrbuf, sizeof(addrbuf));
       logmsg("[%d] response AAAA (%x) '%s'", qid, (unsigned int)QTYPE_AAAA,
-             curlx_inet_ntop(AF_INET6, store, addrbuf, sizeof(addrbuf)));
+             ip ? ip : "(null)");
     }
     if(!ancount_aaaa)
       logmsg("[%d] response AAAA empty", qid);
@@ -655,6 +671,7 @@ static void read_instructions(void)
   }
   /* reset defaults */
   a_delay_ms = aaaa_delay_ms = https_delay_ms = 0;
+  rcode_a = rcode_aaaa = 0;
   blob_reset(&httpsrr);
   finfo_last = finfo;
 
@@ -717,12 +734,30 @@ static void read_instructions(void)
             rc = 1;
           }
         }
+        else if(!strncmp("Rcode-A: ", buf, 9)) {
+          curl_off_t code;
+          const char *pc = &buf[9];
+          rc = 0;
+          if(!curlx_str_number(&pc, &code, 15)) {
+            rcode_a = (unsigned char)code;
+            rc = 1;
+          }
+        }
+        else if(!strncmp("Rcode-AAAA: ", buf, 12)) {
+          curl_off_t code;
+          const char *pc = &buf[12];
+          rc = 0;
+          if(!curlx_str_number(&pc, &code, 15)) {
+            rcode_aaaa = (unsigned char)code;
+            rc = 1;
+          }
+        }
         else {
           /* accept empty line */
           rc = buf[0] ? 0 : 1;
         }
         if(rc != 1) {
-          logmsg("Bad line in %s: '%s'\n", file, buf);
+          logmsg("Bad line in %s: '%s'", file, buf);
         }
         else if(rtype) {
           logmsg("added %s record via '%s'", rtype, buf);

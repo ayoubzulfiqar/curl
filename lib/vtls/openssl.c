@@ -1898,7 +1898,7 @@ static CURLcode ossl_shutdown(struct Curl_cfilter *cf,
       *done = TRUE;
       goto out;
     }
-    if(SSL_ERROR_WANT_WRITE == SSL_get_error(octx->ssl, rc)) {
+    if(SSL_get_error(octx->ssl, rc) == SSL_ERROR_WANT_WRITE) {
       CURL_TRC_CF(data, cf, "SSL shutdown still wants to send");
       connssl->io_need = CURL_SSL_IO_NEED_SEND;
       goto out;
@@ -2144,7 +2144,7 @@ static CURLcode ossl_verifyhost(struct Curl_easy *data,
   else if(dNSName || iPAddress) {
     const char *tname = (peer->type == CURL_SSL_PEER_DNS) ? "hostname" :
                         (peer->type == CURL_SSL_PEER_IPV4) ?
-                        "ipv4 address" : "ipv6 address";
+                        "IPv4 address" : "IPv6 address";
     infof(data, " subjectAltName does not match %s %s", tname,
           peer->origin->user_hostname);
     failf(data, "SSL: no alternative certificate subject name matches "
@@ -2630,37 +2630,31 @@ static CURLcode ossl_set_ssl_version_min_max(struct Curl_cfilter *cf,
   return CURLE_OK;
 }
 
-#ifdef HAVE_BORINGSSL_LIKE
-typedef uint32_t ctx_option_t;
-#elif defined(HAVE_OPENSSL3)
-typedef uint64_t ctx_option_t;
-#elif defined(LIBRESSL_VERSION_NUMBER)
-typedef long ctx_option_t;
-#else
-typedef unsigned long ctx_option_t;
-#endif
-
 CURLcode Curl_ossl_add_session(struct Curl_cfilter *cf,
                                struct Curl_easy *data,
+                               struct ossl_ctx *octx,
                                const char *ssl_peer_key,
                                SSL_SESSION *session,
-                               int ietf_tls_id,
                                const char *alpn,
                                unsigned char *quic_tp,
-                               size_t quic_tp_len)
+                               size_t quic_tp_len,
+                               struct Curl_ssl_session **psession)
 {
+  struct Curl_ssl_session *sc_session = NULL, *sc_dup = NULL;
   unsigned char *der_session_buf = NULL;
   unsigned char *qtp_clone = NULL;
   CURLcode result = CURLE_OK;
 
+  if(psession)
+    *psession = NULL;
   if(!cf || !data)
     goto out;
 
   if(Curl_ssl_scache_use(cf, data)) {
-    struct Curl_ssl_session *sc_session = NULL;
     size_t der_session_size;
     unsigned char *der_session_ptr;
     size_t earlydata_max = 0;
+    int ietf_tls_id = SSL_version(octx->ssl);
 
     der_session_size = i2d_SSL_SESSION(session, NULL);
     if(der_session_size == 0) {
@@ -2698,14 +2692,29 @@ CURLcode Curl_ossl_add_session(struct Curl_cfilter *cf,
                                       earlydata_max, qtp_clone, quic_tp_len,
                                       &sc_session);
     der_session_buf = NULL;  /* took ownership of sdata */
+#ifdef USE_APPLE_SECTRUST
+    if(!result)
+      sc_session->sectrust_verified = octx->sectrust_verified;
+#endif
+    if(!result && psession &&  /* return a duplicate if asked for and FTP */
+       (cf->conn->scheme->family == CURLPROTO_FTP)) {
+        result = Curl_ssl_session_dup(sc_session, &sc_dup);
+    }
     if(!result) {
       result = Curl_ssl_scache_put(cf, data, ssl_peer_key, sc_session);
       /* took ownership of `sc_session` */
+      sc_session = NULL;
     }
   }
 
 out:
   curlx_free(der_session_buf);
+  if(!result && psession) {
+    *psession = sc_dup;
+    sc_dup = NULL;
+  }
+  Curl_ssl_session_destroy(sc_session);
+  Curl_ssl_session_destroy(sc_dup);
   return result;
 }
 
@@ -2718,8 +2727,15 @@ static int ossl_new_session_cb(SSL *ssl, SSL_SESSION *ssl_sessionid)
   if(cf) {
     struct Curl_easy *data = CF_DATA_CURRENT(cf);
     struct ssl_connect_data *connssl = cf->ctx;
-    Curl_ossl_add_session(cf, data, connssl->peer.scache_key, ssl_sessionid,
-                          SSL_version(ssl), connssl->negotiated.alpn, NULL, 0);
+    struct ossl_ctx *octx = (struct ossl_ctx *)connssl->backend;
+    struct Curl_ssl_session *session = NULL;
+    Curl_ossl_add_session(cf, data, octx, connssl->peer.scache_key,
+                          ssl_sessionid, connssl->negotiated.alpn, NULL,
+                          0, &session);
+    if(session) { /* remember current TLS session */
+      Curl_ssl_session_destroy(connssl->session);
+      connssl->session = session;
+    }
   }
   return 0;
 }
@@ -3324,6 +3340,82 @@ CURLcode Curl_ssl_setup_x509_store(struct Curl_cfilter *cf,
   return result;
 }
 
+static bool ossl_apply_session(
+  struct ossl_ctx *octx,
+  struct Curl_cfilter *cf,
+  struct Curl_easy *data,
+  struct alpn_spec *alpns,
+  Curl_ossl_init_session_reuse_cb *sess_reuse_cb,
+  struct Curl_ssl_session *scs)
+{
+  struct ssl_config_data *ssl_config = Curl_ssl_cf_get_config(cf, data);
+  struct ssl_primary_config *conn_cfg = Curl_ssl_cf_get_primary_config(cf);
+  const unsigned char *der_sessionid = scs->sdata;
+  size_t der_sessionid_size = scs->sdata_len;
+  SSL_SESSION *ssl_session = NULL;
+
+  /* If OpenSSL does not accept the session from the cache, this
+   * is not an error. We continue without it. */
+  ssl_session = d2i_SSL_SESSION(NULL, &der_sessionid,
+                                (long)der_sessionid_size);
+  if(ssl_session) {
+    if(!SSL_set_session(octx->ssl, ssl_session)) {
+      VERBOSE(char error_buffer[256]);
+      infof(data, "SSL: SSL_set_session not accepted, "
+            "continuing without: %s",
+            ossl_strerror(ERR_get_error(), error_buffer,
+                          sizeof(error_buffer)));
+    }
+    else {
+      if(conn_cfg->verifypeer &&
+         (SSL_get_verify_result(octx->ssl) != X509_V_OK)
+#ifdef USE_APPLE_SECTRUST
+         /* if sectrust is used and verified the session before */
+         && (!ssl_config->native_ca_store || !scs->sectrust_verified)
+#endif
+        ) {
+        /* Session was from unverified connection, cannot reuse here */
+        SSL_set_session(octx->ssl, NULL);
+        infof(data, "SSL session not peer verified, not reusing");
+      }
+      else {
+        infof(data, "SSL reusing session with ALPN '%s'",
+              scs->alpn ? scs->alpn : "-");
+        octx->reused_session = TRUE;
+#ifdef USE_APPLE_SECTRUST
+        octx->sectrust_session = scs->sectrust_verified;
+#endif
+        infof(data, "SSL verify result: %lx",
+              (unsigned long)SSL_get_verify_result(octx->ssl));
+#ifdef HAVE_OPENSSL_EARLYDATA
+        if(ssl_config->earlydata && scs->alpn &&
+           SSL_SESSION_get_max_early_data(ssl_session) &&
+           !cf->conn->bits.connect_only &&
+           (SSL_version(octx->ssl) == TLS1_3_VERSION)) {
+          bool do_early_data = FALSE;
+          if(sess_reuse_cb)
+            (void)sess_reuse_cb(cf, data, alpns, scs, &do_early_data);
+          if(do_early_data) {
+            /* We only try the ALPN protocol the session used before,
+             * otherwise we might send early data for the wrong protocol */
+            Curl_alpn_restrict_to(alpns, scs->alpn);
+          }
+        }
+#else
+        (void)alpns;
+        (void)ssl_config;
+        (void)sess_reuse_cb;
+#endif
+      }
+    }
+    SSL_SESSION_free(ssl_session);
+  }
+  else {
+    infof(data, "SSL session not accepted by OpenSSL, continuing without");
+  }
+  return (bool)octx->reused_session;
+}
+
 static CURLcode ossl_init_session_and_alpns(
   struct ossl_ctx *octx,
   struct Curl_cfilter *cf,
@@ -3332,7 +3424,6 @@ static CURLcode ossl_init_session_and_alpns(
   const struct alpn_spec *alpns_requested,
   Curl_ossl_init_session_reuse_cb *sess_reuse_cb)
 {
-  struct ssl_config_data *ssl_config = Curl_ssl_cf_get_config(cf, data);
   struct ssl_primary_config *conn_cfg = Curl_ssl_cf_get_primary_config(cf);
   struct alpn_spec alpns;
   CURLcode result;
@@ -3340,70 +3431,26 @@ static CURLcode ossl_init_session_and_alpns(
   Curl_alpn_copy(&alpns, alpns_requested);
 
   octx->reused_session = FALSE;
-  if(Curl_ssl_scache_use(cf, data) && !conn_cfg->verifystatus) {
+
+  if((cf->sockindex == SECONDARYSOCKET) && !(cf->cft->flags & CF_TYPE_PROXY)) {
+    /* FTP is a bitch. On TLS secured transfers, it is a common server
+     * option to require the client to use the SAME TLS session as on
+     * the control connection or it fails the request. See #22225. */
+    struct Curl_ssl_session *scs =
+      Curl_ssl_get_cf_session(data, cf->cft, FIRSTSOCKET);
+    if(scs) {
+      if(ossl_apply_session(octx, cf, data, &alpns, sess_reuse_cb, scs))
+        CURL_TRC_CF(data, cf, "applied SSL session from control connection");
+    }
+  }
+
+  if(!octx->reused_session &&
+     Curl_ssl_scache_use(cf, data) && !conn_cfg->verifystatus) {
     struct Curl_ssl_session *scs = NULL;
 
     result = Curl_ssl_scache_take(cf, data, peer->scache_key, &scs);
     if(!result && scs && scs->sdata && scs->sdata_len) {
-      const unsigned char *der_sessionid = scs->sdata;
-      size_t der_sessionid_size = scs->sdata_len;
-      SSL_SESSION *ssl_session = NULL;
-
-      /* If OpenSSL does not accept the session from the cache, this
-       * is not an error. We continue without it. */
-      ssl_session = d2i_SSL_SESSION(NULL, &der_sessionid,
-                                    (long)der_sessionid_size);
-      if(ssl_session) {
-        if(!SSL_set_session(octx->ssl, ssl_session)) {
-          VERBOSE(char error_buffer[256]);
-          infof(data, "SSL: SSL_set_session not accepted, "
-                "continuing without: %s",
-                ossl_strerror(ERR_get_error(), error_buffer,
-                              sizeof(error_buffer)));
-        }
-        else {
-          if(conn_cfg->verifypeer &&
-             (SSL_get_verify_result(octx->ssl) != X509_V_OK)) {
-            /* Session was from unverified connection, cannot reuse here */
-            SSL_set_session(octx->ssl, NULL);
-            infof(data, "SSL session not peer verified, not reusing");
-          }
-          else {
-            infof(data, "SSL reusing session with ALPN '%s'",
-                  scs->alpn ? scs->alpn : "-");
-            octx->reused_session = TRUE;
-            infof(data, "SSL verify result: %lx",
-                  (unsigned long)SSL_get_verify_result(octx->ssl));
-#ifdef HAVE_OPENSSL_EARLYDATA
-            if(ssl_config->earlydata && scs->alpn &&
-               SSL_SESSION_get_max_early_data(ssl_session) &&
-               !cf->conn->bits.connect_only &&
-               (SSL_version(octx->ssl) == TLS1_3_VERSION)) {
-              bool do_early_data = FALSE;
-              if(sess_reuse_cb) {
-                result = sess_reuse_cb(cf, data, &alpns, scs, &do_early_data);
-                if(result) {
-                  SSL_SESSION_free(ssl_session);
-                  return result;
-                }
-              }
-              if(do_early_data) {
-                /* We only try the ALPN protocol the session used before,
-                 * otherwise we might send early data for the wrong protocol */
-                Curl_alpn_restrict_to(&alpns, scs->alpn);
-              }
-            }
-#else
-            (void)ssl_config;
-            (void)sess_reuse_cb;
-#endif
-          }
-        }
-        SSL_SESSION_free(ssl_session);
-      }
-      else {
-        infof(data, "SSL session not accepted by OpenSSL, continuing without");
-      }
+      (void)ossl_apply_session(octx, cf, data, &alpns, sess_reuse_cb, scs);
     }
     Curl_ssl_scache_return(cf, data, peer->scache_key, scs);
   }
@@ -3888,31 +3935,6 @@ CURLcode Curl_ossl_ctx_init(struct ossl_ctx *octx,
   }
 #endif
 
-#if defined(HAVE_OPENSSL_SRP) && defined(USE_TLS_SRP)
-  if(ssl_config->primary.username && Curl_auth_allowed_to_host(data)) {
-    char * const ssl_username = ssl_config->primary.username;
-    char * const ssl_password = ssl_config->primary.password;
-    infof(data, "Using TLS-SRP username: %s", ssl_username);
-
-    if(!SSL_CTX_set_srp_username(octx->ssl_ctx, ssl_username)) {
-      failf(data, "Unable to set SRP username");
-      return CURLE_BAD_FUNCTION_ARGUMENT;
-    }
-    if(!SSL_CTX_set_srp_password(octx->ssl_ctx, ssl_password)) {
-      failf(data, "failed setting SRP password");
-      return CURLE_BAD_FUNCTION_ARGUMENT;
-    }
-    if(!conn_config->cipher_list) {
-      infof(data, "Setting cipher list SRP");
-
-      if(!SSL_CTX_set_cipher_list(octx->ssl_ctx, "SRP")) {
-        failf(data, "failed setting SRP cipher list");
-        return CURLE_SSL_CIPHER;
-      }
-    }
-  }
-#endif /* HAVE_OPENSSL_SRP && USE_TLS_SRP */
-
   /* OpenSSL always tries to verify the peer. By setting the failure mode
    * to NONE, we allow the connect to complete, regardless of the outcome.
    * We then explicitly check the result and may try alternatives like
@@ -3939,6 +3961,7 @@ CURLcode Curl_ossl_ctx_init(struct ossl_ctx *octx,
 
   /* give application a chance to interfere with SSL set up. */
   if(data->set.ssl.fsslctx) {
+    struct Curl_mapi_guard guard;
     /* When a user callback is installed to modify the SSL_CTX,
      * we need to do the full initialization before calling it.
      * See: #11800 */
@@ -3948,10 +3971,10 @@ CURLcode Curl_ossl_ctx_init(struct ossl_ctx *octx,
         return result;
       octx->x509_store_setup = TRUE;
     }
-    Curl_set_in_callback(data, TRUE);
+    CURL_CBAPI_START(&guard, data, easy_fsslctx);
     result = (*data->set.ssl.fsslctx)(data, octx->ssl_ctx,
                                       data->set.ssl.fsslctxp);
-    Curl_set_in_callback(data, FALSE);
+    CURL_CBAPI_END(&guard);
     if(result) {
       failf(data, "error signaled by SSL ctx callback");
       return result;
@@ -4014,7 +4037,7 @@ static CURLcode ossl_connect_step1(struct Curl_cfilter *cf,
   BIO *bio;
   CURLcode result;
 
-  DEBUGASSERT(ssl_connect_1 == connssl->connecting_state);
+  DEBUGASSERT(connssl->connecting_state == ssl_connect_1);
   DEBUGASSERT(octx);
   DEBUGASSERT(connssl->peer.origin);
 
@@ -4129,7 +4152,7 @@ static CURLcode ossl_connect_step2(struct Curl_cfilter *cf,
   struct ssl_connect_data *connssl = cf->ctx;
   struct ossl_ctx *octx = (struct ossl_ctx *)connssl->backend;
   struct ssl_config_data *ssl_config = Curl_ssl_cf_get_config(cf, data);
-  DEBUGASSERT(ssl_connect_2 == connssl->connecting_state);
+  DEBUGASSERT(connssl->connecting_state == ssl_connect_2);
   DEBUGASSERT(octx);
 
   connssl->io_need = CURL_SSL_IO_NEED_NONE;
@@ -4161,25 +4184,25 @@ static CURLcode ossl_connect_step2(struct Curl_cfilter *cf,
     int detail = SSL_get_error(octx->ssl, err);
     CURL_TRC_CF(data, cf, "SSL_connect() -> err=%d, detail=%d", err, detail);
 
-    if(SSL_ERROR_WANT_READ == detail) {
+    if(detail == SSL_ERROR_WANT_READ) {
       CURL_TRC_CF(data, cf, "SSL_connect() -> want recv");
       connssl->io_need = CURL_SSL_IO_NEED_RECV;
       return CURLE_AGAIN;
     }
-    if(SSL_ERROR_WANT_WRITE == detail) {
+    if(detail == SSL_ERROR_WANT_WRITE) {
       CURL_TRC_CF(data, cf, "SSL_connect() -> want send");
       connssl->io_need = CURL_SSL_IO_NEED_SEND;
       return CURLE_AGAIN;
     }
 #ifdef SSL_ERROR_WANT_ASYNC
-    if(SSL_ERROR_WANT_ASYNC == detail) {
+    if(detail == SSL_ERROR_WANT_ASYNC) {
       CURL_TRC_CF(data, cf, "SSL_connect() -> want async");
       connssl->io_need = CURL_SSL_IO_NEED_RECV;
       return CURLE_AGAIN;
     }
 #endif
 #ifdef SSL_ERROR_WANT_RETRY_VERIFY
-    if(SSL_ERROR_WANT_RETRY_VERIFY == detail) {
+    if(detail == SSL_ERROR_WANT_RETRY_VERIFY) {
       CURL_TRC_CF(data, cf, "SSL_connect() -> want retry_verify");
       Curl_xfer_pause_recv(data, TRUE);
       return CURLE_AGAIN;
@@ -4681,13 +4704,13 @@ static CURLcode ossl_chain_get_der(struct Curl_cfilter *cf,
 static CURLcode ossl_apple_verify(struct Curl_cfilter *cf,
                                   struct Curl_easy *data,
                                   struct ossl_ctx *octx,
-                                  struct ssl_peer *peer,
-                                  bool *pverified)
+                                  struct ssl_peer *peer)
 {
   struct ssl_primary_config *conn_config = Curl_ssl_cf_get_primary_config(cf);
   struct ossl_certs_ctx chain;
   CURLcode result;
 
+  octx->sectrust_verified = FALSE;
   memset(&chain, 0, sizeof(chain));
   chain.sk = SSL_get_peer_cert_chain(octx->ssl);
   chain.num_certs = chain.sk ? sk_X509_num(chain.sk) : 0;
@@ -4699,8 +4722,11 @@ static CURLcode ossl_apple_verify(struct Curl_cfilter *cf,
       result = CURLE_PEER_FAILED_VERIFICATION;
     }
     else {
-      /* when session was reused, there is no peer cert chain */
-      *pverified = FALSE;
+      /* When session was reused, there is no peer cert chain.
+       * We trust it if it came from a SecTrust verified TLS. */
+      CURL_TRC_CF(data, cf, "session reused, sectrust_session=%d",
+                  octx->sectrust_session);
+      octx->sectrust_verified = (bool)octx->sectrust_session;
       return CURLE_OK;
     }
   }
@@ -4727,12 +4753,12 @@ static CURLcode ossl_apple_verify(struct Curl_cfilter *cf,
     if(!result && ocsp_missing && conn_config->verifystatus &&
        !octx->reused_session) {
       /* verified, but OCSP stapling is required and server sent none */
-      *pverified = TRUE;
+      octx->sectrust_verified = TRUE;
       failf(data, "No OCSP response received");
       return CURLE_SSL_INVALIDCERTSTATUS;
     }
   }
-  *pverified = !result;
+  octx->sectrust_verified = !result;
   return result;
 }
 #endif /* USE_APPLE_SECTRUST */
@@ -4749,9 +4775,6 @@ CURLcode Curl_ossl_check_peer_cert(struct Curl_cfilter *cf,
   long ossl_verify;
   X509 *server_cert;
   bool verified = FALSE;
-#if !defined(OPENSSL_NO_OCSP) && defined(USE_APPLE_SECTRUST)
-  bool sectrust_verified = FALSE;
-#endif
 
   if(data->set.ssl.certinfo && !octx->reused_session) {
     /* asked to gather certificate info. Reused sessions do not have cert
@@ -4799,15 +4822,13 @@ CURLcode Curl_ossl_check_peer_cert(struct Curl_cfilter *cf,
     /* we verify using Apple SecTrust *unless* OpenSSL already verified.
      * This may happen if the application intercepted the OpenSSL callback
      * and installed its own. */
-    result = ossl_apple_verify(cf, data, octx, peer, &verified);
+    result = ossl_apple_verify(cf, data, octx, peer);
     if(result && (result != CURLE_PEER_FAILED_VERIFICATION))
       goto out; /* unexpected error */
-    if(verified) {
+    if(octx->sectrust_verified) {
       infof(data, "SSL certificate verified via Apple SecTrust.");
       ssl_config->certverifyresult = X509_V_OK;
-#ifndef OPENSSL_NO_OCSP
-      sectrust_verified = TRUE;
-#endif
+      verified = TRUE;
     }
   }
 #endif
@@ -4826,9 +4847,9 @@ CURLcode Curl_ossl_check_peer_cert(struct Curl_cfilter *cf,
 #ifndef OPENSSL_NO_OCSP
   if(conn_config->verifystatus &&
 #ifdef USE_APPLE_SECTRUST
-     !sectrust_verified && /* already verified via apple sectrust, cannot
-                            * verifystate via OpenSSL in that case as it
-                            * does not have the trust anchors */
+     !octx->sectrust_verified && /* already verified via sectrust, cannot
+                                  * verifystate via OpenSSL in that case as it
+                                  * does not have the trust anchors */
 #endif
      !octx->reused_session) {
     /* do not do this after Session ID reuse */
@@ -4856,7 +4877,7 @@ static CURLcode ossl_connect_step3(struct Curl_cfilter *cf,
   struct ssl_connect_data *connssl = cf->ctx;
   struct ossl_ctx *octx = (struct ossl_ctx *)connssl->backend;
 
-  DEBUGASSERT(ssl_connect_3 == connssl->connecting_state);
+  DEBUGASSERT(connssl->connecting_state == ssl_connect_3);
 
   /*
    * We check certificates to authenticate the server; otherwise we risk
@@ -4968,7 +4989,7 @@ static CURLcode ossl_connect(struct Curl_cfilter *cf,
   *done = FALSE;
   connssl->io_need = CURL_SSL_IO_NEED_NONE;
 
-  if(ssl_connect_1 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_1) {
     if(Curl_ossl_need_httpsrr(data) &&
        !Curl_conn_dns_resolved_https(data, cf->sockindex,
                                      connssl->peer.peer)) {
@@ -4981,7 +5002,7 @@ static CURLcode ossl_connect(struct Curl_cfilter *cf,
       goto out;
   }
 
-  if(ssl_connect_2 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_2) {
     CURL_TRC_CF(data, cf, "ossl_connect, step2");
 #ifdef HAVE_OPENSSL_EARLYDATA
     if(connssl->earlydata_state == ssl_earlydata_await) {
@@ -5002,7 +5023,7 @@ static CURLcode ossl_connect(struct Curl_cfilter *cf,
       goto out;
   }
 
-  if(ssl_connect_3 == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_3) {
     CURL_TRC_CF(data, cf, "ossl_connect, step3");
     result = ossl_connect_step3(cf, data);
     if(result)
@@ -5020,7 +5041,7 @@ static CURLcode ossl_connect(struct Curl_cfilter *cf,
 #endif
   }
 
-  if(ssl_connect_done == connssl->connecting_state) {
+  if(connssl->connecting_state == ssl_connect_done) {
     CURL_TRC_CF(data, cf, "ossl_connect, done");
     connssl->state = ssl_connection_complete;
   }
@@ -5458,10 +5479,10 @@ static CURLcode ossl_sha256sum(const unsigned char *input,
   EVP_MD_CTX *mdctx;
   (void)unused;
 
-  mdctx = EVP_MD_CTX_create();
+  mdctx = EVP_MD_CTX_new();
   if(!mdctx)
     return CURLE_OUT_OF_MEMORY;
-  if(!EVP_DigestInit(mdctx, EVP_sha256())) {
+  if(!EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL)) {
     result = CURLE_FAILED_INIT;
     goto out;
   }
@@ -5469,7 +5490,7 @@ static CURLcode ossl_sha256sum(const unsigned char *input,
      !EVP_DigestFinal_ex(mdctx, sha256sum, NULL))
     result = CURLE_BAD_FUNCTION_ARGUMENT;
 out:
-  EVP_MD_CTX_destroy(mdctx);
+  EVP_MD_CTX_free(mdctx);
   return result;
 }
 

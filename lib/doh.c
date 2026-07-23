@@ -58,12 +58,13 @@ static const char * const errors[] = {
   "Unexpected CLASS",
   "No content",
   "Bad ID",
-  "Name too long"
+  "Name too long",
+  "No such name"
 };
 
 static const char *doh_strerror(DOHcode code)
 {
-  if((code >= DOH_OK) && (code <= DOH_DNS_NAME_TOO_LONG))
+  if((code >= DOH_OK) && (code <= DOH_DNS_NXDOMAIN))
     return errors[code];
   return "bad error code";
 }
@@ -434,7 +435,7 @@ static CURLcode doh_probe_run(struct Curl_easy *data,
      private_data via CURLOPT_PRIVATE if they so choose. */
   DEBUGASSERT(!doh->set.private_data);
 
-  if(curl_multi_add_handle(multi, doh))
+  if(Curl_multi_add_handle(multi, doh))
     goto error;
 
   *pmid = doh->mid;
@@ -751,6 +752,8 @@ UNITTEST DOHcode doh_resp_decode(const unsigned char *doh,
   if(!doh || doh[0] || doh[1])
     return DOH_DNS_BAD_ID; /* bad ID */
   rcode = doh[3] & 0x0f;
+  if(rcode == 3)
+    return DOH_DNS_NXDOMAIN; /* name does not exist */
   if(rcode)
     return DOH_DNS_BAD_RCODE; /* bad rcode */
 
@@ -1186,47 +1189,11 @@ UNITTEST CURLcode doh_resp_decode_httpsrr(struct Curl_easy *data,
   *hrr = lhrr;
   return CURLE_OK;
 err:
-  Curl_httpsrr_cleanup(lhrr);
-  curlx_safefree(lhrr);
+  Curl_httpsrr_destroy(lhrr);
   return result;
 }
 
-#if defined(DEBUGBUILD) && defined(CURLVERBOSE)
-static void doh_print_httpsrr(struct Curl_easy *data,
-                              struct Curl_https_rrinfo *hrr)
-{
-  DEBUGASSERT(hrr);
-  infof(data, "HTTPS RR: priority %d, target: %s", hrr->priority, hrr->target);
-  if(hrr->alpns[0] != ALPN_none)
-    infof(data, "HTTPS RR: alpns %u %u %u %u",
-          hrr->alpns[0], hrr->alpns[1], hrr->alpns[2], hrr->alpns[3]);
-  else
-    infof(data, "HTTPS RR: no alpns");
-  if(hrr->no_def_alpn)
-    infof(data, "HTTPS RR: no_def_alpn set");
-  else
-    infof(data, "HTTPS RR: no_def_alpn not set");
-  if(hrr->ipv4hints) {
-    doh_print_buf(data, "HTTPS RR: ipv4hints",
-                  hrr->ipv4hints, hrr->ipv4hints_len);
-  }
-  else
-    infof(data, "HTTPS RR: no ipv4hints");
-  if(hrr->echconfiglist) {
-    doh_print_buf(data, "HTTPS RR: ECHConfigList",
-                  hrr->echconfiglist, hrr->echconfiglist_len);
-  }
-  else
-    infof(data, "HTTPS RR: no ECHConfigList");
-  if(hrr->ipv6hints) {
-    doh_print_buf(data, "HTTPS RR: ipv6hint",
-                  hrr->ipv6hints, hrr->ipv6hints_len);
-  }
-  else
-    infof(data, "HTTPS RR: no ipv6hints");
-}
-# endif
-#endif
+#endif /* USE_HTTPSRR */
 
 CURLcode Curl_doh_take_result(struct Curl_easy *data,
                               struct Curl_resolv_async *async,
@@ -1247,7 +1214,9 @@ CURLcode Curl_doh_take_result(struct Curl_easy *data,
       CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST;
   }
   else if(!dohp->pending) {
+    struct Curl_dns_entry *dns = NULL;
     DOHcode rc[DOH_SLOT_COUNT];
+    bool negative = TRUE;
     int slot;
 
     memset(rc, 0, sizeof(rc));
@@ -1262,38 +1231,59 @@ CURLcode Curl_doh_take_result(struct Curl_easy *data,
       rc[slot] = doh_resp_decode(curlx_dyn_uptr(&p->body),
                                  curlx_dyn_len(&p->body),
                                  p->dnstype, &de);
+      /* Failing without an NXDOMAIN answer - a SERVFAIL-class rcode or
+         an undecodable response - says nothing about the name. Such a
+         failure must not be cached as a negative entry. */
+      if(rc[slot] && (rc[slot] != DOH_DNS_NXDOMAIN))
+        negative = FALSE;
       if(rc[slot]) {
         CURL_TRC_DNS(data, "DoH: %s type %s for %s", doh_strerror(rc[slot]),
                      doh_type2name(p->dnstype), dohp->host);
       }
     } /* next slot */
 
-    if(!rc[DOH_SLOT_IPV4] || !rc[DOH_SLOT_IPV6]) {
-      /* we have an address, of one kind or other */
-      struct Curl_dns_entry *dns;
-      struct Curl_addrinfo *ai;
+    if(CURL_DNSQ_IS_ADDR(async->dns_queries)) {
+      if(!rc[DOH_SLOT_IPV4] || !rc[DOH_SLOT_IPV6]) {
+        /* we have an address, of one kind or other */
+        struct Curl_addrinfo *ai;
 
-      if(Curl_trc_ft_is_verbose(data, &Curl_trc_feat_dns)) {
-        CURL_TRC_DNS(data, "hostname: %s", dohp->host);
-        doh_show(data, &de);
+        if(Curl_trc_ft_is_verbose(data, &Curl_trc_feat_dns)) {
+          CURL_TRC_DNS(data, "hostname: %s", dohp->host);
+          doh_show(data, &de);
+        }
+
+        result = doh2ai(&de, dohp->host, dohp->port, &ai);
+        if(result) {
+          /* a decoded response without any usable address, e.g. only
+             CNAME records, is an authoritative "no data" answer */
+          if((result == CURLE_COULDNT_RESOLVE_HOST) && negative)
+            async->negative_answer = TRUE;
+          goto error;
+        }
+
+        /* we got a response, create a dns entry. */
+        dns = Curl_dnsc_mk_addr(data, async->dns_queries,
+                                     &ai, dohp->host, dohp->port);
+        if(!dns) {
+          result = CURLE_OUT_OF_MEMORY;
+          goto error;
+        }
+      } /* address processing done */
+      else {
+        /* every query failed. Only NXDOMAIN answers for all of them
+           make this a negative answer, eligible for caching. */
+        async->negative_answer = negative;
+        result = async->for_proxy ?
+          CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST;
       }
+    }
 
-      result = doh2ai(&de, dohp->host, dohp->port, &ai);
-      if(result)
-        goto error;
-
-      /* we got a response, create a dns entry. */
-      dns = Curl_dnscache_mk_entry(data, async->dns_queries,
-                                   &ai, dohp->host, dohp->port);
-      if(!dns) {
-        result = CURLE_OUT_OF_MEMORY;
-        goto error;
-      }
-
-      /* Now add and HTTPSRR information if we have */
 #ifdef USE_HTTPSRR
+    if(!dns && (async->dns_queries & CURL_DNSQ_HTTPS)) {
+      /* Now add and HTTPSRR information if we have */
+      struct Curl_https_rrinfo *hrr = NULL;
+
       if(de.numhttps_rrs > 0 && result == CURLE_OK) {
-        struct Curl_https_rrinfo *hrr = NULL;
         result = doh_resp_decode_httpsrr(data, de.https_rrs->val,
                                          de.https_rrs->len, &hrr);
         if(result) {
@@ -1302,22 +1292,20 @@ CURLcode Curl_doh_take_result(struct Curl_easy *data,
           goto error;
         }
         infof(data, "Some HTTPS RR to process");
-#if defined(DEBUGBUILD) && defined(CURLVERBOSE)
-        doh_print_httpsrr(data, hrr);
-#endif
-        Curl_dns_entry_set_https_rr(dns, hrr);
       }
+      Curl_httpsrr_trace(data, hrr);
+      dns = Curl_dnsc_mk_https(data, &hrr, async->hostname, async->port);
+      if(!dns) {
+        result = CURLE_OUT_OF_MEMORY;
+        goto error;
+      }
+    }
 #endif /* USE_HTTPSRR */
 
-      /* and add the entry to the cache */
+    /* and add the entry to the cache */
+    if(dns)
       result = Curl_dnscache_add(data, dns);
-      *pdns = dns;
-    } /* address processing done */
-    else {
-      result = async->for_proxy ?
-        CURLE_COULDNT_RESOLVE_PROXY : CURLE_COULDNT_RESOLVE_HOST;
-    }
-
+    *pdns = dns;
   } /* !dohp->pending */
   else
     /* wait for pending DoH transactions to complete */
@@ -1351,7 +1339,7 @@ static void doh_close(struct Curl_easy *data,
         continue;
       }
       /* data->multi might already be reset at this time */
-      curl_multi_remove_handle(data->multi, probe_data);
+      Curl_multi_remove_handle(data->multi, probe_data);
       Curl_close(&probe_data);
     }
     data->sub_xfer_done = NULL;

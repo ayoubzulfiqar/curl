@@ -46,6 +46,7 @@
 
 #include "urldata.h"
 #include "cfilters.h"
+#include "cf-dns.h"
 
 #include "vtls/vtls.h" /* generic SSL protos etc */
 #include "vtls/vtls_int.h"
@@ -544,7 +545,7 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
     do {
       char buffer[1024];
       size_t want = left > sizeof(buffer) ? sizeof(buffer) : left;
-      if(want != fread(buffer, 1, want, fp))
+      if(fread(buffer, 1, want, fp) != want)
         goto end;
       if(curlx_dyn_addn(&buf, buffer, want))
         goto end;
@@ -877,19 +878,6 @@ void Curl_ssl_peer_cleanup(struct ssl_peer *peer)
   peer->type = CURL_SSL_PEER_DNS;
 }
 
-static void cf_close(struct Curl_cfilter *cf, struct Curl_easy *data)
-{
-  struct ssl_connect_data *connssl = cf->ctx;
-  if(connssl) {
-    connssl->ssl_impl->close(cf, data);
-    connssl->state = ssl_connection_none;
-    connssl->connecting_state = ssl_connect_1;
-    connssl->prefs_checked = FALSE;
-    Curl_ssl_peer_cleanup(&connssl->peer);
-  }
-  cf->connected = FALSE;
-}
-
 static ssl_peer_type get_peer_type(const char *hostname)
 {
   if(hostname && hostname[0]) {
@@ -957,13 +945,18 @@ out:
 
 static void ssl_cf_destroy(struct Curl_cfilter *cf, struct Curl_easy *data)
 {
-  struct cf_call_data save;
-
-  CF_DATA_SAVE(save, cf, data);
-  cf_close(cf, data);
-  CF_DATA_RESTORE(cf, save);
-  cf_ctx_free(cf->ctx);
-  cf->ctx = NULL;
+  struct ssl_connect_data *connssl = cf->ctx;
+  if(connssl) {
+    connssl->ssl_impl->close(cf, data);
+    connssl->state = ssl_connection_none;
+    connssl->connecting_state = ssl_connect_1;
+    connssl->prefs_checked = FALSE;
+    Curl_ssl_peer_cleanup(&connssl->peer);
+    Curl_ssl_session_destroy(connssl->session);
+    cf_ctx_free(connssl);
+    cf->ctx = NULL;
+  }
+  cf->connected = FALSE;
 }
 
 static CURLcode ssl_cf_connect(struct Curl_cfilter *cf,
@@ -1429,8 +1422,20 @@ CURLcode Curl_cf_ssl_insert_after(struct Curl_cfilter *cf_at,
   result = cf_ssl_create(&cf, data, cf_at->conn);
   if(!result)
     result = cf_ssl_peer_init(cf, origin, peer, &cf_at->conn->ssl_config);
-  if(!result)
+  if(!result) {
     Curl_conn_cf_insert_after(cf_at, cf);
+#if defined(USE_HTTPSRR) && defined(USE_ECH)
+    /* When using ECH, kick off the HTTPS-RR resolve */
+    if((origin->scheme->family == CURLPROTO_HTTP) &&
+       CURLECH_ENABLED(data) &&
+       Curl_ssl_supports(data, SSLSUPP_ECH) &&
+       (data->set.tls_ech != CURLECH_GREASE) &&
+       !data->set.str[STRING_ECH_CONFIG]) {
+      result = Curl_conn_dns_add_https_resolve(data, cf->conn, cf->sockindex,
+                                               origin);
+    }
+#endif /* USE_HTTPSRR && USE_ECH */
+  }
   else if(cf)
     Curl_conn_cf_discard_chain(&cf, data);
   return result;
@@ -1774,6 +1779,32 @@ CURLcode Curl_on_session_reuse(struct Curl_cfilter *cf,
     *do_early_data = !result;
   }
   return result;
+}
+
+struct Curl_ssl_session *Curl_ssl_get_cf_session(struct Curl_easy *data,
+                                                 const struct Curl_cftype *cft,
+                                                 int sockindex)
+{
+  if(data->conn &&
+#ifndef CURL_DISABLE_PROXY
+     ((cft == &Curl_cft_ssl) || (cft == &Curl_cft_ssl_proxy))) {
+#else
+     (cft == &Curl_cft_ssl)) {
+#endif
+    struct Curl_cfilter *cf1 = data->conn->cfilter[sockindex];
+    for(; cf1; cf1 = cf1->next) {
+      /* A tunneling proxy does not offer end2end encryption, even if
+       * it does SSL itself (e.g. QUIC H3 proxy) */
+      if(cf1->cft == cft)
+        break;
+    }
+    if(cf1) {
+      struct ssl_connect_data *connssl = cf1->ctx;
+      if(connssl)
+        return connssl->session;
+    }
+  }
+  return NULL;
 }
 
 #endif /* USE_SSL */

@@ -206,7 +206,7 @@ CURLcode Curl_conn_shutdown(struct Curl_easy *data, int sockindex, bool *done)
   }
 
   *done = FALSE;
-  if(!Curl_shutdown_started(data, sockindex)) {
+  if(!Curl_shutdown_started(data->conn, sockindex)) {
     Curl_shutdown_start(data, sockindex, 0);
   }
   else {
@@ -644,17 +644,6 @@ int Curl_protocol_for_transport(uint8_t transport)
   }
 }
 
-bool Curl_conn_cf_wants_httpsrr(struct Curl_cfilter *cf,
-                                struct Curl_easy *data)
-{
-  (void)data;
-  for(; cf; cf = cf->next) {
-    if(cf->cft->flags & CF_TYPE_HTTPSRR)
-      return TRUE;
-  }
-  return FALSE;
-}
-
 const char *Curl_conn_get_alpn_negotiated(struct Curl_easy *data,
                                           struct connectdata *conn)
 {
@@ -728,17 +717,17 @@ CURLcode Curl_conn_cf_adjust_pollset(struct Curl_cfilter *cf,
                                      struct easy_pollset *ps)
 {
   CURLcode result = CURLE_OK;
-  /* Get the lowest not-connected filter, if there are any */
-  while(cf && !cf->connected && cf->next && !cf->next->connected)
-    cf = cf->next;
-  /* Skip all filters that have already shut down */
-  while(cf && cf->shutdown)
-    cf = cf->next;
-  /* From there on, give all filters a chance to adjust the pollset.
-   * Lower filters are called later, so they may override */
-  while(cf && !result) {
-    result = cf->cft->adjust_pollset(cf, data, ps);
-    cf = cf->next;
+  /* Go through all filters, top to bottom, and let them manage the pollset
+   * - connected filters can do so
+   * - CF_TYPE_DNS filters can
+   * - unconnected filters without next or connect next can
+   */
+  for(; cf && !result; cf = cf->next) {
+    if(cf->shutdown)
+      continue;
+    if(cf->connected || (cf->cft->flags & CF_TYPE_DNS) ||
+       !cf->next || cf->next->connected)
+      result = cf->cft->adjust_pollset(cf, data, ps);
   }
   return result;
 }
@@ -748,23 +737,29 @@ CURLcode Curl_conn_adjust_pollset(struct Curl_easy *data,
                                   struct easy_pollset *ps)
 {
   CURLcode result = CURLE_OK;
+  bool want_io = !!ps->n;
   int i;
 
   DEBUGASSERT(data);
   DEBUGASSERT(conn);
   /* During connect time, connection filters may add sockets to the pollset
    * even when the transfer neither wants to send nor receive. And those
-   * sockets, when having events, are served.
-   * Once connected however, a transfer that neither wants to send nor receive
+   * sockets, when having events, are served. The same applies to a
+   * filter chain whose shutdown has started.
+   * Once a filter chain is connected however and before its shutdown
+   * starts, a transfer that neither wants to send nor receive
    * will never call the connection filters. Any sockets added by the filters
    * will not change state and POLLIN/POLLOUT events will trigger forever,
-   * making us busy loop. See #21671 */
-  if(ps->n || !Curl_conn_is_connected(conn, FIRSTSOCKET) ||
-     (conn->cfilter[SECONDARYSOCKET] &&
-      !Curl_conn_is_connected(conn, SECONDARYSOCKET))) {
-    for(i = 0; (i < 2) && !result && conn; ++i) {
+   * making us busy loop. See #21671.
+   * Gate each filter chain on its own state, so that one chain being in
+   * connect or shutdown does not add poll events for the other. Check
+   * against the transfer's own interest, before any chain added sockets
+   * of its own. */
+  for(i = 0; (i < 2) && !result; ++i) {
+    if(conn->cfilter[i] &&
+       (want_io || !Curl_conn_is_connected(conn, i) ||
+        Curl_shutdown_started(conn, i)))
       result = Curl_conn_cf_adjust_pollset(conn->cfilter[i], data, ps);
-    }
   }
   return result;
 }

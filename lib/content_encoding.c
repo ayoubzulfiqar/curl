@@ -206,6 +206,14 @@ static CURLcode inflate_stream(struct Curl_easy *data,
       /* No more data to flush: exit loop. */
       break;
     case Z_STREAM_END:
+      if((started == ZLIB_INIT_GZIP) && (z->avail_in >= 2) &&
+         (z->next_in[0] == 0x1f) && (z->next_in[1] == 0x8b)) {
+        /* a second gzip member follows; curl does not support
+           multi-member gzip responses */
+        failf(data, "Multi-member gzip response not supported");
+        result = exit_zlib(data, z, &zp->zlib_init, CURLE_WRITE_ERROR);
+        break;
+      }
       result = process_trailer(data, zp);
       break;
     case Z_DATA_ERROR:
@@ -291,6 +299,7 @@ static const struct Curl_cwtype deflate_encoding = {
   NULL,
   deflate_do_init,
   deflate_do_write,
+  Curl_cwriter_def_flush,
   deflate_do_close,
   sizeof(struct zlib_writer)
 };
@@ -352,6 +361,7 @@ static const struct Curl_cwtype gzip_encoding = {
   "x-gzip",
   gzip_do_init,
   gzip_do_write,
+  Curl_cwriter_def_flush,
   gzip_do_close,
   sizeof(struct zlib_writer)
 };
@@ -485,6 +495,7 @@ static const struct Curl_cwtype brotli_encoding = {
   NULL,
   brotli_do_init,
   brotli_do_write,
+  Curl_cwriter_def_flush,
   brotli_do_close,
   sizeof(struct brotli_writer)
 };
@@ -598,6 +609,7 @@ static const struct Curl_cwtype zstd_encoding = {
   NULL,
   zstd_do_init,
   zstd_do_write,
+  Curl_cwriter_def_flush,
   zstd_do_close,
   sizeof(struct zstd_writer)
 };
@@ -609,6 +621,7 @@ static const struct Curl_cwtype identity_encoding = {
   "none",
   Curl_cwriter_def_init,
   Curl_cwriter_def_write,
+  Curl_cwriter_def_flush,
   Curl_cwriter_def_close,
   sizeof(struct Curl_cwriter)
 };
@@ -696,6 +709,7 @@ static const struct Curl_cwtype error_writer = {
   NULL,
   error_do_init,
   error_do_write,
+  Curl_cwriter_def_flush,
   error_do_close,
   sizeof(struct Curl_cwriter)
 };

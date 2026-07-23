@@ -175,7 +175,7 @@ static bool header_has_value(const char **headerp, struct Curl_str *outp)
     (!curlx_str_single(headerp, ':') || !curlx_str_single(headerp, ';'));
 
   if(value) {
-    curlx_str_untilnl(headerp, outp, MAX_HTTP_RESP_HEADER_SIZE);
+    curlx_str_cspn(headerp, outp, "\r\n");
     curlx_str_trimblanks(outp);
   }
   return value;
@@ -1415,7 +1415,7 @@ bool Curl_compareheader(const char *headerline, /* line to check */
   /* pass the header */
   p = &headerline[hlen];
 
-  if(curlx_str_untilnl(&p, &val, MAX_HTTP_RESP_HEADER_SIZE))
+  if(curlx_str_cspn(&p, &val, "\r\n"))
     return FALSE;
   curlx_str_trimblanks(&val);
 
@@ -1432,7 +1432,7 @@ bool Curl_compareheader(const char *headerline, /* line to check */
           !p[clen]))
         return TRUE; /* match! */
       /* advance to the next comma */
-      if(curlx_str_until(&p, &next, MAX_HTTP_RESP_HEADER_SIZE, ',') ||
+      if(curlx_str_until(&p, &next, len, ',') ||
          curlx_str_single(&p, ','))
         break; /* no comma, get out */
 
@@ -1440,6 +1440,10 @@ bool Curl_compareheader(const char *headerline, /* line to check */
       do
         curlx_str_passblanks(&p);
       while(!curlx_str_single(&p, ','));
+      /* trailing blanks may move the parsing point past the value end,
+         then there is nothing left to match */
+      if((size_t)(p - o) > len)
+        break;
       len -= (p - o);
     }
   }
@@ -1780,21 +1784,22 @@ CURLcode Curl_add_custom_headers(struct Curl_easy *data,
       struct Curl_str name;
       const char *p = headers->data;
       const char *origp = p;
+      size_t hlen = strlen(origp);
 
       /* explicitly asked to send header without content is done by a header
          that ends with a semicolon, but there must be no colon present in the
          name */
-      if(!curlx_str_until(&p, &name, MAX_HTTP_RESP_HEADER_SIZE, ';') &&
+      if(!curlx_str_until(&p, &name, hlen, ';') &&
          !curlx_str_single(&p, ';') &&
          !curlx_str_single(&p, '\0') &&
          !memchr(curlx_str(&name), ':', curlx_strlen(&name)))
         blankheader = TRUE;
       else {
         p = origp;
-        if(!curlx_str_until(&p, &name, MAX_HTTP_RESP_HEADER_SIZE, ':') &&
+        if(!curlx_str_until(&p, &name, hlen, ':') &&
            !curlx_str_single(&p, ':')) {
           struct Curl_str val;
-          curlx_str_untilnl(&p, &val, MAX_HTTP_RESP_HEADER_SIZE);
+          curlx_str_untilnl(&p, &val, hlen);
           curlx_str_trimblanks(&val);
           if(!curlx_strlen(&val))
             /* no content, do not send this */
@@ -1804,6 +1809,12 @@ CURLcode Curl_add_custom_headers(struct Curl_easy *data,
           /* no colon */
           continue;
       }
+
+      /* a field name is a token and carries no surrounding whitespace, so
+         trim the parsed name before matching. Otherwise `Authorization :`
+         (space before the colon) slips past the Authorization/Cookie check
+         below and gets forwarded to another host on a redirect. */
+      curlx_str_trimblanks(&name);
 
       /* only send this if the contents was non-blank or done special */
 
@@ -1839,9 +1850,11 @@ CURLcode Curl_add_custom_headers(struct Curl_easy *data,
                  other hosts */
               !Curl_auth_allowed_to_host(data))
         ;
-      else if(blankheader)
-        result = curlx_dyn_addf(req, "%.*s:\r\n", (int)curlx_strlen(&name),
-                                curlx_str(&name));
+      else if(blankheader) {
+        result = curlx_dyn_addn(req, curlx_str(&name), curlx_strlen(&name));
+        if(!result)
+          result = curlx_dyn_addn(req, STRCONST(":\r\n"));
+      }
       else
         result = curlx_dyn_addf(req, "%s\r\n", origp);
 
@@ -1994,17 +2007,17 @@ static CURLcode http_set_aptr_host(struct Curl_easy *data)
 {
   struct connectdata *conn = data->conn;
   struct dynamically_allocated_data *aptr = &data->state.aptr;
-  const char *ptr;
+  const char *ptr = NULL;
 
   curlx_safefree(aptr->host);
 #ifndef CURL_DISABLE_COOKIES
   curlx_safefree(data->req.cookiehost);
 #endif
 
-  ptr = Curl_checkheaders(data, STRCONST("Host"));
-  if(ptr &&
-     (!data->state.this_is_a_follow ||
-      Curl_peer_equal(data->state.initial_origin, data->state.origin))) {
+  if(Curl_peer_equal(data->state.initial_origin, data->state.origin))
+    ptr = Curl_checkheaders(data, STRCONST("Host"));
+
+  if(ptr) {
 #ifndef CURL_DISABLE_COOKIES
     /* If we have a given custom Host: header, we extract the hostname in
        order to possibly use it for cookie reasons later on. We only allow the
@@ -2041,30 +2054,40 @@ static CURLcode http_set_aptr_host(struct Curl_easy *data)
 #endif
 
     if(!curl_strequal("Host:", ptr)) {
-      aptr->host = curl_maprintf("Host:%s\r\n", &ptr[5]);
+      aptr->host = curl_maprintf("Host:%s", &ptr[5]);
       if(!aptr->host)
         return CURLE_OUT_OF_MEMORY;
     }
   }
   else {
-    /* Use the hostname as present in the URL if it was IPv6. */
-    char *host = (data->state.origin->user_hostname[0] == '[') ?
-       data->state.origin->user_hostname : data->state.origin->hostname;
+    /* This is the  HTTP Host: header, so we want
+     * - for IPv6 origins: "[ipv6-address]" where the IPv6 address is
+     *  found in origin->hostname, stripped of zoneid/scopeid.
+     * - the (IDN converted) origin->hostname (DNS name or IPv4) otherwise.
+     * Note: zoneid/scopeid  only applies to local routing and has no
+     * meaning on the remote HTTP server (eg. would confuse it). */
+    bool ipv6 = (bool)data->state.origin->ipv6;
+    struct dynbuf tmp;
+    size_t hlen;
+    CURLcode result;
 
-    if(((conn->given->protocol & (CURLPROTO_HTTPS | CURLPROTO_WSS)) &&
-        (data->state.origin->port == PORT_HTTPS)) ||
-       ((conn->given->protocol & (CURLPROTO_HTTP | CURLPROTO_WS)) &&
-        (data->state.origin->port == PORT_HTTP)))
-      /* if(HTTPS on port 443) OR (HTTP on port 80) then do not include
-         the port number in the host string */
-      aptr->host = curl_maprintf("Host: %s\r\n", host);
-    else
-      aptr->host = curl_maprintf("Host: %s:%d\r\n",
-                                 host, data->state.origin->port);
+    curlx_dyn_init(&tmp, DYN_HTTP_REQUEST);
+    result = curlx_dyn_addn(&tmp, STRCONST("Host: "));
+    if(!result && ipv6)
+      result = curlx_dyn_addn(&tmp, STRCONST("["));
+    if(!result)
+      result = curlx_dyn_add(&tmp, data->state.origin->hostname);
+    if(!result && ipv6)
+      result = curlx_dyn_addn(&tmp, STRCONST("]"));
+    if(!result &&
+       ((data->state.origin->port != data->state.origin->scheme->defport) ||
+       (data->state.origin->scheme->family != conn->scheme->family))) {
+      result = curlx_dyn_addf(&tmp, ":%u", data->state.origin->port);
+    }
 
-    if(!aptr->host)
-      /* without Host: we cannot make a nice request */
-      return CURLE_OUT_OF_MEMORY;
+    aptr->host = result ? NULL : curlx_dyn_take(&tmp, &hlen);
+    curlx_dyn_free(&tmp);
+    return result;
   }
   return CURLE_OK;
 }
@@ -2115,7 +2138,7 @@ static CURLcode http_target(struct Curl_easy *data,
       return CURLE_OUT_OF_MEMORY;
     }
 
-    if(curl_strequal("http", data->state.up.scheme)) {
+    if(data->state.origin->scheme == &Curl_scheme_http) {
       /* when getting HTTP, we do not want the userinfo the URL */
       uc = curl_url_set(h, CURLUPART_USER, NULL, 0);
       if(uc) {
@@ -2157,7 +2180,7 @@ static CURLcode http_target(struct Curl_easy *data,
     if(result)
       return result;
 
-    if(curl_strequal("ftp", data->state.up.scheme) &&
+    if((data->state.origin->scheme == &Curl_scheme_ftp) &&
        data->set.proxy_transfer_mode) {
       /* when doing ftp, append ;type=<a|i> if not present */
       size_t len = strlen(path);
@@ -2890,8 +2913,11 @@ static CURLcode http_add_hd(struct Curl_easy *data,
     break;
 
   case H1_HD_HOST:
-    if(data->state.aptr.host)
+    if(data->state.aptr.host) {
       result = curlx_dyn_add(req, data->state.aptr.host);
+      if(!result)
+        result = curlx_dyn_addn(req, STRCONST("\r\n"));
+    }
     break;
 
 #ifndef CURL_DISABLE_PROXY
@@ -3208,9 +3234,7 @@ static CURLcode http_header_a(struct Curl_easy *data,
     struct SingleRequest *k = &data->req;
     enum alpnid id = (k->httpversion == 30) ? ALPN_h3 :
       (k->httpversion == 20) ? ALPN_h2 : ALPN_h1;
-    return Curl_altsvc_parse(
-      data, data->asi, v, id, data->state.origin->hostname,
-      curlx_uitous((unsigned int)data->state.origin->port));
+    return Curl_altsvc_parse(data, data->asi, v, data->state.origin, id);
   }
 #else
   (void)data;
