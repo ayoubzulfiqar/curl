@@ -57,12 +57,6 @@ enum alpnid Curl_alpn2alpnid(const unsigned char *name, size_t len)
   return ALPN_none; /* unknown, probably rubbish input */
 }
 
-enum alpnid Curl_str2alpnid(const struct Curl_str *cstr)
-{
-  return Curl_alpn2alpnid((const unsigned char *)curlx_str(cstr),
-                          curlx_strlen(cstr));
-}
-
 #endif
 
 /*
@@ -81,7 +75,7 @@ UNITTEST timediff_t timeleft_now_ms(struct Curl_easy *data,
   timediff_t timeleft_ms = 0;
   timediff_t ctimeleft_ms = 0;
 
-  if(Curl_shutdown_started(data, FIRSTSOCKET))
+  if(data->conn && Curl_shutdown_started(data->conn, FIRSTSOCKET))
     return Curl_shutdown_timeleft(data, data->conn, FIRSTSOCKET);
   else if(Curl_is_connecting(data)) {
     timediff_t ctimeout_ms = (data->set.connecttimeout > 0) ?
@@ -170,13 +164,10 @@ void Curl_shutdown_clear(struct Curl_easy *data, int sockindex)
   memset(pt, 0, sizeof(*pt));
 }
 
-bool Curl_shutdown_started(struct Curl_easy *data, int sockindex)
+bool Curl_shutdown_started(struct connectdata *conn, int sockindex)
 {
-  if(data->conn) {
-    struct curltime *pt = &data->conn->shutdown.start[sockindex];
-    return (pt->tv_sec > 0) || (pt->tv_usec > 0);
-  }
-  return FALSE;
+  const struct curltime *pt = &conn->shutdown.start[sockindex];
+  return (pt->tv_sec > 0) || (pt->tv_usec > 0);
 }
 
 /*
@@ -246,22 +237,23 @@ CURLcode Curl_conn_setup(struct Curl_easy *data,
                          int sockindex,
                          int ssl_mode)
 {
+  struct Curl_peer *first_peer = Curl_conn_get_first_peer(conn, sockindex);
   CURLcode result = CURLE_OK;
-  struct Curl_peer *peer = Curl_conn_get_first_peer(conn, sockindex);
   uint8_t dns_queries;
 
   DEBUGASSERT(data);
   DEBUGASSERT(conn->scheme);
   DEBUGASSERT(!conn->cfilter[sockindex]);
 
-  if(!peer)
+  if(!first_peer)
     return CURLE_FAILED_INIT;
 
 #ifndef CURL_DISABLE_HTTP
   if(!conn->cfilter[sockindex] &&
      conn->scheme->protocol == CURLPROTO_HTTPS) {
     DEBUGASSERT(ssl_mode != CURL_CF_SSL_DISABLE);
-    result = Curl_cf_https_setup(data, conn, sockindex);
+    result = Curl_cf_https_setup(
+      data, Curl_conn_get_destination(conn, sockindex), conn, sockindex);
     if(result)
       goto out;
   }
@@ -275,13 +267,16 @@ CURLcode Curl_conn_setup(struct Curl_easy *data,
       goto out;
   }
 
+  /* Whatever the filter chain will be in the end, it will need the
+   * resolving of `first_peer`. Add that now so the resolve is started
+   * right away. */
   dns_queries = Curl_resolv_dns_queries(data, conn->ip_version);
-#ifdef USE_HTTPSRR
-  if(sockindex == FIRSTSOCKET)
-    dns_queries |= CURL_DNSQ_HTTPS;
-#endif
-  result = Curl_cf_dns_add(data, conn, sockindex, peer, dns_queries,
-                           conn->transport_wanted);
+  result = Curl_conn_dns_add_addr_resolve(data, conn, sockindex,
+                                          first_peer, dns_queries,
+                                          conn->transport_wanted);
+  if(result)
+    goto out;
+
   DEBUGASSERT(conn->cfilter[sockindex]);
 out:
   return result;

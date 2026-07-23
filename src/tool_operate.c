@@ -178,7 +178,6 @@ static curl_off_t VmsSpecialSize(const char *name,
   case FAB$C_VAR:
   case FAB$C_VFC:
     return vms_realfilesize(name, stat_buf);
-    break;
   default:
     return stat_buf->st_size;
   }
@@ -651,7 +650,7 @@ static CURLcode post_output_handling(struct per_transfer *per,
 
   /* Set file extended attributes */
   if(!result && config->xattr && outs->fopened && outs->stream) {
-    rc = fwrite_xattr(curl, per->url, fileno(outs->stream));
+    rc = fwrite_xattr(curl, per->url, fileno(outs->stream), outs->filename);
     if(rc) {
       char errbuf[STRERROR_LEN];
       warnf("Error setting extended attributes on '%s': %s", outs->filename,
@@ -671,7 +670,7 @@ static CURLcode post_output_handling(struct per_transfer *per,
       return CURLE_WRITE_ERROR;
   }
 
-  if(!outs->regular_file && outs->stream) {
+  if(!outs->regular_file && outs->stream && !outs->out_null) {
     /* Dump standard stream buffered data */
     rc = fflush(outs->stream);
     if(!result && rc) {
@@ -1553,7 +1552,13 @@ static CURLcode add_parallel_transfers(CURLM *multi, CURLSH *share,
     return CURLE_UNKNOWN_OPTION;
   }
 
-  if(nxfers < (curl_off_t)(global->parallel_max * 2)) {
+  if(all_added >= global->parallel_max) {
+    /* we are at max parallelism, no need to create more transfers */
+    *morep = TRUE; /* pretend there are, we have not checked */
+    return CURLE_OK;
+  }
+  /* if the list is empty, create one to kickstart the loop */
+  if(!transfers) {
     bool skipped = FALSE;
     do {
       result = create_transfer(share, addedp, &skipped);
@@ -1561,6 +1566,7 @@ static CURLcode add_parallel_transfers(CURLM *multi, CURLSH *share,
         return result;
     } while(skipped);
   }
+  /* add transfers until max parallelism is achieved again */
   for(per = transfers; per && (all_added < global->parallel_max);
       per = per->next) {
     if(per->added || per->skip)
@@ -1768,7 +1774,8 @@ static int cb_socket(CURL *easy, curl_socket_t s, int action,
     }
     break;
   default:
-    abort();
+    DEBUGASSERT(0);
+    return -1;
   }
 
   return 0;

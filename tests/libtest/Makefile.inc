@@ -36,6 +36,8 @@ UTILS_H = testutil.h testtrace.h unitcheck.h
 CURLX_C = \
   ../../lib/curl_threads.c \
   ../../lib/curlx/fopen.c \
+  ../../lib/curlx/inet_ntop.c \
+  ../../lib/curlx/inet_pton.c \
   ../../lib/curlx/multibyte.c \
   ../../lib/curlx/strcopy.c \
   ../../lib/curlx/strerr.c \
@@ -52,6 +54,7 @@ TOOLX_C = \
 
 # All libtest programs
 TESTS_C = \
+  cli_ev_download.c \
   cli_ftp_upload.c \
   cli_h2_pausing.c \
   cli_h2_serverpush.c \
@@ -61,6 +64,7 @@ TESTS_C = \
   cli_tls_session_reuse.c \
   cli_upload_pausing.c \
   cli_ws_data.c \
+  cli_ws_pause.c \
   cli_ws_pingpong.c \
   \
   lib500.c lib501.c lib502.c lib503.c lib504.c lib505.c lib506.c lib507.c \
@@ -100,7 +104,7 @@ TESTS_C = \
   lib1591.c lib1592.c lib1593.c lib1594.c                     lib1597.c \
   lib1598.c lib1599.c \
   lib1647.c lib1648.c lib1649.c \
-  lib1662.c \
+  lib1662.c                                         lib1678.c \
   lib1686.c \
   lib1900.c lib1901.c lib1902.c lib1903.c lib1905.c lib1906.c lib1907.c \
   lib1908.c           lib1910.c lib1911.c lib1912.c lib1913.c \
@@ -115,7 +119,7 @@ TESTS_C = \
   lib2023.c lib2032.c lib2082.c \
   lib2301.c lib2302.c lib2304.c           lib2306.c lib2308.c lib2309.c \
   lib2402.c           lib2404.c lib2405.c \
-  lib2412.c \
+  lib2412.c           lib2414.c \
   lib2502.c lib2504.c lib2505.c lib2506.c \
   lib2700.c \
   lib3010.c lib3025.c lib3026.c lib3027.c lib3033.c lib3034.c \

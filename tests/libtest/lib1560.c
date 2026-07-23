@@ -153,6 +153,38 @@ struct clearurlcase {
 };
 
 static const struct testcase get_parts_list[] = {
+  /* non-supported URL without hostname */
+  {"weird:///path",
+   "weird | [11] | [12] | [13] |  | [15] | /path | [16] | [17]",
+   CURLU_NON_SUPPORT_SCHEME|CURLU_NO_AUTHORITY, 0, CURLUE_OK},
+  /* non-supported URL without hostname, using path with multiple leading
+     slashes */
+  {"weird:////path",
+   "weird | [11] | [12] | [13] |  | [15] | //path | [16] | [17]",
+   CURLU_NON_SUPPORT_SCHEME|CURLU_NO_AUTHORITY, 0, CURLUE_OK},
+
+  /* RFC 4291 IPv4-Mapped IPv6 Addresses */
+  {"https://[0:0:0:0:0:FFFF:129.144.52.38]:1234",
+   "https | [11] | [12] | [13] | [::ffff:129.144.52.38] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[::FFFF:127.0.0.1]:1234",
+   "https | [11] | [12] | [13] | [::ffff:127.0.0.1] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[::13.1.68.3]:1234",
+   "https | [11] | [12] | [13] | [::13.1.68.3] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[0:0:0:0:0:FFFF:7f00:0001]:1234",
+   "https | [11] | [12] | [13] | [::ffff:127.0.0.1] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[::FFFF:7f00:0001]:1234",
+   "https | [11] | [12] | [13] | [::ffff:127.0.0.1] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[%3A%3A13%2e1%2e68%2e3%25eth0]:1234",
+   "https | [11] | [12] | [13] | [::13.1.68.3] eth0 | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
+  {"https://[0:0:0:0:0:0:0d01:4403]:1234",
+   "https | [11] | [12] | [13] | [::13.1.68.3] | 1234 "
+   "| / | [16] | [17]", CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
   { /* query and fragments with control characters */
     "http://host/path/?\001#\002",
     "", CURLU_URLENCODE, 0, CURLUE_MALFORMED_INPUT },
@@ -532,9 +564,70 @@ static const struct testcase get_parts_list[] = {
   {"file:///hello.html",
    "file | [11] | [12] | [13] | [14] | [15] | /hello.html | [16] | [17]",
    0, 0, CURLUE_OK},
+
+  /* verify that we get the right default ports */
   {"https://127.0.0.1",
    "https | [11] | [12] | [13] | 127.0.0.1 | 443 | / | [16] | [17]",
    0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"http://127.0.0.1",
+   "http | [11] | [12] | [13] | 127.0.0.1 | 80 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"ftp://127.0.0.1",
+   "ftp | [11] | [12] | [13] | 127.0.0.1 | 21 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"ftps://127.0.0.1",
+   "ftps | [11] | [12] | [13] | 127.0.0.1 | 990 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"scp://127.0.0.1",
+   "scp | [11] | [12] | [13] | 127.0.0.1 | 22 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"sftp://127.0.0.1",
+   "sftp | [11] | [12] | [13] | 127.0.0.1 | 22 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"imap://127.0.0.1",
+   "imap | [11] | [12] | [13] | 127.0.0.1 | 143 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"imaps://127.0.0.1",
+   "imaps | [11] | [12] | [13] | 127.0.0.1 | 993 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"smtp://127.0.0.1",
+   "smtp | [11] | [12] | [13] | 127.0.0.1 | 25 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"smtps://127.0.0.1",
+   "smtps | [11] | [12] | [13] | 127.0.0.1 | 465 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"pop3://127.0.0.1",
+   "pop3 | [11] | [12] | [13] | 127.0.0.1 | 110 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"pop3s://127.0.0.1",
+   "pop3s | [11] | [12] | [13] | 127.0.0.1 | 995 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+#ifndef CURL_DISABLE_WEBSOCKETS
+  {"ws://127.0.0.1",
+   "ws | [11] | [12] | [13] | 127.0.0.1 | 80 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"wss://127.0.0.1",
+   "wss | [11] | [12] | [13] | 127.0.0.1 | 443 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+#endif
+  {"telnet://127.0.0.1",
+   "telnet | [11] | [12] | [13] | 127.0.0.1 | 23 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"gopher://127.0.0.1",
+   "gopher | [11] | [12] | [13] | 127.0.0.1 | 70 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"gophers://127.0.0.1",
+   "gophers | [11] | [12] | [13] | 127.0.0.1 | 70 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+#ifndef CURL_DISABLE_LDAP
+  {"ldap://127.0.0.1",
+   "ldap | [11] | [12] | [13] | 127.0.0.1 | 389 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+  {"ldaps://127.0.0.1",
+   "ldaps | [11] | [12] | [13] | 127.0.0.1 | 636 | / | [16] | [17]",
+   0, CURLU_DEFAULT_PORT, CURLUE_OK},
+#endif
+
   {"https://127.0.0.1",
    "https | [11] | [12] | [13] | 127.0.0.1 | [15] | / | [16] | [17]",
    CURLU_DEFAULT_SCHEME, 0, CURLUE_OK},
@@ -869,9 +962,11 @@ static const struct urltestcase get_url_list[] = {
   {"pop3.example.com/path/html",
    "pop3://pop3.example.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#ifndef CURL_DISABLE_LDAP
   {"ldap.example.com/path/html",
    "ldap://ldap.example.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#endif
   {"imap.example.com/path/html",
    "imap://imap.example.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
@@ -890,9 +985,11 @@ static const struct urltestcase get_url_list[] = {
   {"pop3.com/path/html",
    "pop3://pop3.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#ifndef CURL_DISABLE_LDAP
   {"ldap.com/path/html",
    "ldap://ldap.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#endif
   {"imap.com/path/html",
    "imap://imap.com/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
@@ -908,9 +1005,11 @@ static const struct urltestcase get_url_list[] = {
   {"pop3/path/html",
    "http://pop3/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#ifndef CURL_DISABLE_LDAP
   {"ldap/path/html",
    "http://ldap/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
+#endif
   {"imap/path/html",
    "http://imap/path/html",
    CURLU_GUESS_SCHEME, 0, CURLUE_OK},
@@ -1530,19 +1629,26 @@ static const struct redircase set_url_list[] = {
    0, 0, CURLUE_OK},
   {"http://example.org/foo/bar",
    "#",
-   "http://example.org/foo/bar",
-   /* This happens because the parser removes empty fragments */
+   "http://example.org/foo/bar#",
    0, 0, CURLUE_OK},
   {"http://example.org/foo/bar",
    "?",
-   "http://example.org/foo/bar",
-   /* This happens because the parser removes empty queries */
+   "http://example.org/foo/bar?",
    0, 0, CURLUE_OK},
   {"http://example.org/foo/bar",
    "?#",
-   "http://example.org/foo/bar",
-   /* This happens because the parser removes empty queries and fragments */
+   "http://example.org/foo/bar?#",
    0, 0, CURLUE_OK},
+  {"http://host/path?", "#new",
+   "http://host/path?#new", 0, 0, CURLUE_OK},
+  {"http://host/path?#", "#new",
+   "http://host/path?#new", 0, 0, CURLUE_OK},
+  {"http://host/path#", "?new",
+   "http://host/path?new", 0, 0, CURLUE_OK},
+  {"http://host/path?#", "?new",
+   "http://host/path?new", 0, 0, CURLUE_OK},
+  {"http://host/path?#", "sub",
+   "http://host/sub", 0, 0, CURLUE_OK},
   {"http://example.com/please/../gimme/%TESTNUMBER?foobar#hello",
    "http://example.net/there/it/is/../../tes t case=/%TESTNUMBER0002? yes no",
    "http://example.net/there/tes%20t%20case=/%TESTNUMBER0002?+yes+no",
@@ -1617,7 +1723,7 @@ static int set_url(void)
       }
       else {
         char *url = NULL;
-        rc = curl_url_get(urlp, CURLUPART_URL, &url, 0);
+        rc = curl_url_get(urlp, CURLUPART_URL, &url, CURLU_GET_EMPTY);
         if(rc) {
           curl_mfprintf(stderr, "%s:%d Get URL returned %d (%s)\n",
                         __FILE__, __LINE__, (int)rc, curl_url_strerror(rc));

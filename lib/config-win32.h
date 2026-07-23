@@ -71,9 +71,6 @@
 /*                        OTHER HEADER INFO                         */
 /* ---------------------------------------------------------------- */
 
-/* Define if you have the ANSI C header files. */
-#define STDC_HEADERS 1
-
 /* Define to 1 if bool is an available type. */
 #if (defined(_MSC_VER) && (_MSC_VER >= 1800)) || defined(__MINGW32__)
 #define HAVE_BOOL_T 1
@@ -153,12 +150,6 @@
 
 /* Define to the function return type for send. */
 #define SEND_TYPE_RETV int
-
-/* Must always use local implementations on Windows. */
-/* Define to 1 if you have an IPv6 capable working inet_ntop function. */
-/* #undef HAVE_INET_NTOP */
-/* Define to 1 if you have an IPv6 capable working inet_pton function. */
-/* #undef HAVE_INET_PTON */
 
 /* Define to 1 if you have the `basename' function. */
 #ifdef __MINGW32__

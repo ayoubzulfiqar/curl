@@ -558,7 +558,7 @@ sub checksystemfeatures {
             $curl = $_;
             $CURLVERSION = $1;
             $CURLVERNUM = $CURLVERSION;
-            $CURLVERNUM =~ s/^([0-9.]+)(.*)/$1/; # leading dots and numbers
+            $CURLVERNUM =~ s/^([0-9.]+)(.*)/$1/; # leading digits and dots
             $curl =~ s/^(.*)(libcurl.*)/$1/g or die "Failure determining curl binary version";
 
             $libcurl = $2;
@@ -589,6 +589,9 @@ sub checksystemfeatures {
             elsif($libcurl =~ /\swolfssl\b/i) {
                 $feature{"wolfssl"} = 1;
                 $feature{"SSLpinning"} = 1;
+                if($libcurl =~ /\swolfssl\/5\.9\.2\b/i) {
+                    $feature{"wolfssl-5.9.2"} = 1;
+                }
             }
             elsif($libcurl =~ /\s(AWS-LC|BoringSSL)\b/i) {
                 # OpenSSL compatible API
@@ -697,8 +700,6 @@ sub checksystemfeatures {
             $feature{"Kerberos"} = $feat =~ /Kerberos/i;
             # SPNEGO enabled
             $feature{"SPNEGO"} = $feat =~ /SPNEGO/i;
-            # TLS-SRP enabled
-            $feature{"TLS-SRP"} = $feat =~ /TLS-SRP/i;
             # PSL enabled
             $feature{"PSL"} = $feat =~ /PSL/i;
             # alt-svc enabled
@@ -732,33 +733,13 @@ sub checksystemfeatures {
                 # 'https-proxy' is used as "server" so consider it a protocol
                 push @protocols, 'https-proxy';
             }
+            $feature{"SSLS-EXPORT"} = $feat =~ /SSLS-EXPORT/;
             # Unicode support
             $feature{"Unicode"} = $feat =~ /Unicode/i;
             # Thread-safe init
             $feature{"threadsafe"} = $feat =~ /threadsafe/i;
             $feature{"HTTPSRR"} = $feat =~ /HTTPSRR/;
             $feature{"ECH"} = $feat =~ /ECH/;
-        }
-        #
-        # Test harness currently uses a non-stunnel server in order to
-        # run HTTP TLS-SRP tests required when curl is built with https
-        # protocol support and TLS-SRP feature enabled. For convenience
-        # 'httptls' may be included in the test harness protocols array
-        # to differentiate this from classic stunnel based 'https' test
-        # harness server.
-        #
-        if($feature{"TLS-SRP"}) {
-            my $add_httptls;
-            for(@protocols) {
-                if($_ =~ /^https(-ipv6|)$/) {
-                    $add_httptls = 1;
-                    last;
-                }
-            }
-            if($add_httptls && (! grep /^httptls$/, @protocols)) {
-                push @protocols, 'httptls';
-                push @protocols, 'httptls-ipv6';
-            }
         }
     }
 
@@ -983,7 +964,7 @@ sub citest_starttest {
     my $testnum = $_[0];
 
     # get the name of the test early
-    my $testname= (getpart("client", "name"))[0];
+    my $testname = (getpart("client", "name"))[0];
     chomp $testname;
 
     # create test result in CI services
@@ -1234,7 +1215,7 @@ sub singletest_count {
     logmsg sprintf("test %04d...", $testnum) if(!$automakestyle);
 
     # name of the test
-    my $testname= (getpart("client", "name"))[0];
+    my $testname = (getpart("client", "name"))[0];
     chomp $testname;
     logmsg "[$testname]\n" if(!$short);
 
@@ -1280,7 +1261,7 @@ sub singletest_check {
     my $ok = "";
     my $res;
     chomp $errorcode;
-    my $testname= (getpart("client", "name"))[0];
+    my $testname = (getpart("client", "name"))[0];
     chomp $testname;
 
     # what parts to cut off from stdout/stderr
@@ -1429,7 +1410,7 @@ sub singletest_check {
     my @strippart = getpart("verify", "strippart");
 
     # this is the valid protocol blurb curl should generate
-    my @protocol= getpart("verify", "protocol");
+    my @protocol = getpart("verify", "protocol");
     if(@protocol) {
         # Verify the sent request
         my @out = loadarray("$logdir/$SERVERIN");
@@ -1447,7 +1428,7 @@ sub singletest_check {
             # strip off all lines that match the patterns from both arrays
             chomp $_;
             @out = striparray( $_, \@out);
-            @protocol= striparray( $_, \@protocol);
+            @protocol = striparray( $_, \@protocol);
         }
 
         for my $strip (@strippart) {
@@ -1617,7 +1598,7 @@ sub singletest_check {
             # strip off all lines that match the patterns from both arrays
             chomp $_;
             @out = striparray( $_, \@out);
-            @proxyprot= striparray( $_, \@proxyprot);
+            @proxyprot = striparray( $_, \@proxyprot);
         }
 
         for my $strip (@strippart) {
@@ -1951,8 +1932,8 @@ sub singletest_check {
 sub singletest_success {
     my ($testnum, $count, $total, $errorreturncode) = @_;
 
-    my $sofar= time()-$start;
-    my $esttotal = $sofar/$count * $total;
+    my $sofar = time() - $start;
+    my $esttotal = $sofar / $count * $total;
     my $estleft = $esttotal - $sofar;
     my $timeleft = sprintf("remaining: %02d:%02d",
                      $estleft / 60,
@@ -1965,7 +1946,7 @@ sub singletest_success {
                        $count, $total, $timeleft, $took, $duration);
     }
     else {
-        my $testname= (getpart("client", "name"))[0];
+        my $testname = (getpart("client", "name"))[0];
         chomp $testname;
         logmsg "PASS: $testnum - $testname\n";
     }
@@ -2538,6 +2519,10 @@ while(@ARGV) {
         if($xtra =~ s/(\d+)$//) {
             $jobs = $1;
         }
+    }
+    elsif($ARGV[0] eq "-k") {  # delete this check after December 2026
+        print "Option -k became always-on in 7.65.2 (2019) and now a no-op. Delete it to continue.\n";
+        exit 1;
     }
     elsif($ARGV[0] eq "-r") {
         # run time statistics needs Time::HiRes

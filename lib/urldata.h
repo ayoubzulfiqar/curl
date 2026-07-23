@@ -37,7 +37,7 @@
 
 #define DEFAULT_CONNCACHE_SIZE 5
 
-/* length of longest IPv6 address string including the trailing null */
+/* length of longest IPv6 address string including the null-terminator */
 #define MAX_IPADR_LEN sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 
 /* Max string input length is a precaution against abuse and to detect junk
@@ -53,6 +53,7 @@
 
 #include "curlx/timeval.h"
 
+#include "api.h"
 #include "asyn.h"
 #include "cookie.h"
 #include "creds.h"
@@ -98,7 +99,10 @@ typedef CURLcode (Curl_recv)(struct Curl_easy *data,   /* transfer */
 #include "cf-socket.h"
 
 #ifdef HAVE_GSSAPI
-#  ifdef HAVE_GSSGNU
+#  ifdef HAVE_GSSAPPLE
+#    include <GSS/gssapi.h>
+#    include <GSS/gssapi_oid.h>
+#  elif defined(HAVE_GSSGNU)
 #    include <gss.h>
 #  elif defined(HAVE_GSSAPI_H)
 #    include <gssapi.h>
@@ -128,19 +132,6 @@ typedef CURLcode (Curl_recv)(struct Curl_easy *data,   /* transfer */
 #define UPLOADBUFFER_DEFAULT 65536
 #define UPLOADBUFFER_MAX     (2 * 1024 * 1024)
 #define UPLOADBUFFER_MIN     CURL_MAX_WRITE_SIZE
-
-#define CURLEASY_MAGIC_NUMBER 0xc0dedbadU
-#ifdef DEBUGBUILD
-/* On a debug build, we want to fail hard on easy handles that
- * are not NULL, but no longer have the MAGIC touch. This gives
- * us early warning on things only discovered by valgrind otherwise. */
-#define GOOD_EASY_HANDLE(x) \
-  (((x) && ((x)->magic == CURLEASY_MAGIC_NUMBER)) ? TRUE : \
-   (DEBUGASSERT(!(x)), FALSE))
-#else
-#define GOOD_EASY_HANDLE(x) \
-  ((x) && ((x)->magic == CURLEASY_MAGIC_NUMBER))
-#endif
 
 #ifdef USE_WINDOWS_SSPI
 #include "curl_sspi.h"
@@ -305,6 +296,7 @@ struct connectdata {
   char *options; /* options string, allocated */
   struct curltime created; /* creation time */
   struct curltime lastused; /* when returned to the connection pool as idle */
+  struct curltime lastchecked; /* when last checked alive status */
 
   /* A connection can have one or two sockets and connection filters.
    * The protocol using the 2nd one is FTP for CONTROL+DATA sockets */
@@ -559,11 +551,6 @@ struct time_node {
 
 /* individual pieces of the URL */
 struct urlpieces {
-  char *scheme;
-  char *hostname;
-  char *port;
-  char *user;
-  char *password;
   char *options;
   char *path;
   char *query;
@@ -836,14 +823,6 @@ enum dupstring {
 #ifndef CURL_DISABLE_SMTP
   STRING_MAIL_FROM,
   STRING_MAIL_AUTH,
-#endif
-#ifdef USE_TLS_SRP
-  STRING_TLSAUTH_USERNAME,  /* TLS auth <username> */
-  STRING_TLSAUTH_PASSWORD,  /* TLS auth <password> */
-#ifndef CURL_DISABLE_PROXY
-  STRING_TLSAUTH_USERNAME_PROXY, /* TLS auth <username> */
-  STRING_TLSAUTH_PASSWORD_PROXY, /* TLS auth <password> */
-#endif
 #endif
   STRING_BEARER,                /* <bearer>, if used */
 #ifdef USE_UNIX_SOCKETS
@@ -1233,6 +1212,26 @@ struct Curl_easy {
   /* First a simple identifier to easier detect if a user mix up this easy
      handle with a multi handle. Set this to CURLEASY_MAGIC_NUMBER */
   uint32_t magic;
+  /* once an easy handle is added to a multi, either explicitly by the
+   * libcurl application or implicitly during `curl_easy_perform()`,
+   * a unique identifier inside this one multi instance. */
+  uint32_t mid;
+  CURLMstate mstate;  /* the handle's state */
+  CURLcode result;   /* previous result */
+
+  struct connectdata *conn;
+  struct Curl_multi *multi;    /* if non-NULL, points to the multi handle
+                                  struct to which this "belongs" when used by
+                                  the multi interface */
+  struct Curl_eapi_stack callstack; /* easy api calls ongoing */
+
+  struct Curl_share *share;    /* Share, handles global variable mutexing */
+
+  struct Curl_multi *multi_easy; /* if non-NULL, points to the multi handle
+                                    struct to which this "belongs" when used
+                                    by the easy interface */
+  struct Curl_message msg; /* A single posted message. */
+
   /* once an easy handle is tied to a connection pool a non-negative number to
      distinguish this transfer from other using the same pool. For easier
      tracking in log output. This may wrap around after LONG_MAX to 0 again,
@@ -1240,27 +1239,8 @@ struct Curl_easy {
      uniqueness either IFF more than one connection pool is used by the
      libcurl application. */
   curl_off_t id;
-  /* once an easy handle is added to a multi, either explicitly by the
-   * libcurl application or implicitly during `curl_easy_perform()`,
-   * a unique identifier inside this one multi instance. */
-  uint32_t mid;
   uint32_t master_mid; /* if set, this transfer belongs to a master */
   multi_sub_xfer_done_cb *sub_xfer_done;
-
-  struct connectdata *conn;
-
-  CURLMstate mstate;  /* the handle's state */
-  CURLcode result;   /* previous result */
-
-  struct Curl_message msg; /* A single posted message. */
-
-  struct Curl_multi *multi;    /* if non-NULL, points to the multi handle
-                                  struct to which this "belongs" when used by
-                                  the multi interface */
-  struct Curl_multi *multi_easy; /* if non-NULL, points to the multi handle
-                                    struct to which this "belongs" when used
-                                    by the easy interface */
-  struct Curl_share *share;    /* Share, handles global variable mutexing */
 
   /* `meta_hash` is a general key-value store for implementations
    * with the lifetime of the easy handle.

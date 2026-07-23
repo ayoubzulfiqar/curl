@@ -51,11 +51,11 @@ static void trc_write(struct Curl_easy *data, curl_infotype type,
 {
   if(data->set.verbose) {
     if(data->set.fdebug) {
-      bool inCallback = Curl_is_in_callback(data);
-      Curl_set_in_callback(data, TRUE);
+      struct Curl_mapi_guard guard;
+      CURL_CBAPI_START(&guard, data, easy_fdebug);
       (void)(*data->set.fdebug)(data, type, CURL_UNCONST(ptr), size,
                                 data->set.debugdata);
-      Curl_set_in_callback(data, inCallback);
+      CURL_CBAPI_END(&guard);
     }
     else {
       static const char s_infotype[CURLINFO_END][3] = {
@@ -133,22 +133,21 @@ void Curl_debug(struct Curl_easy *data, curl_infotype type,
     char buf[TRC_LINE_MAX];
     size_t len;
     if(data->set.fdebug) {
-      bool inCallback = Curl_is_in_callback(data);
-
+      struct Curl_mapi_guard guard;
       if(CURL_TRC_IDS(data) && (size < TRC_LINE_MAX)) {
         len = trc_print_ids(data, buf, TRC_LINE_MAX);
         len += curl_msnprintf(buf + len, TRC_LINE_MAX - len, "%.*s",
                               (int)size, ptr);
         len = trc_end_buf(buf, len, TRC_LINE_MAX, FALSE);
-        Curl_set_in_callback(data, TRUE);
+        CURL_CBAPI_START(&guard, data, easy_fdebug);
         (void)(*data->set.fdebug)(data, type, buf, len, data->set.debugdata);
-        Curl_set_in_callback(data, inCallback);
+        CURL_CBAPI_END(&guard);
       }
       else {
-        Curl_set_in_callback(data, TRUE);
+        CURL_CBAPI_START(&guard, data, easy_fdebug);
         (void)(*data->set.fdebug)(data, type, CURL_UNCONST(ptr),
                                   size, data->set.debugdata);
-        Curl_set_in_callback(data, inCallback);
+        CURL_CBAPI_END(&guard);
       }
     }
     else {
@@ -345,7 +344,7 @@ void Curl_trc_easy_timers(struct Curl_easy *data)
       while(e) {
         struct time_node *n = Curl_node_elem(e);
         e = Curl_node_next(e);
-        CURL_TRC_TIMER(data, n->eid, "expires in %" FMT_TIMEDIFF_T "ns",
+        CURL_TRC_TIMER(data, n->eid, "expires in %" FMT_TIMEDIFF_T "us",
                        curlx_ptimediff_us(&n->time, pnow));
       }
     }
@@ -545,7 +544,7 @@ static struct trc_feat_def trc_feats[] = {
   { &Curl_trc_feat_ssls,      TRC_CT_NETWORK },
 #endif
 #ifdef USE_SSH
-  { &Curl_trc_feat_ssh,      TRC_CT_PROTOCOL },
+  { &Curl_trc_feat_ssh,       TRC_CT_PROTOCOL },
 #endif
 #if !defined(CURL_DISABLE_WEBSOCKETS) && !defined(CURL_DISABLE_HTTP)
   { &Curl_trc_feat_ws,        TRC_CT_PROTOCOL },

@@ -1449,6 +1449,26 @@ static CURLcode setopt_mimepost(struct Curl_easy *data, curl_mime *mimep)
 #endif /* !CURL_DISABLE_MIME */
 #endif /* !CURL_DISABLE_HTTP || !CURL_DISABLE_SMTP || !CURL_DISABLE_IMAP */
 
+static CURLcode setopt_share(struct Curl_easy *data, struct Curl_share *set)
+{
+  CURLcode result;
+
+  if(data->conn) {
+    /* As this handle already has a connection attached, changing share now
+       would be complicated and error-prone */
+    infof(data, "Cannot change share object while in use");
+    result = CURLE_BAD_FUNCTION_ARGUMENT;
+  }
+  else {
+    /* disconnect from old share, if any and possible */
+    result = Curl_share_easy_unlink(data);
+    if(!result && GOOD_SHARE_HANDLE(set))
+      /* use new share if it set */
+      result = Curl_share_easy_link(data, set);
+  }
+  return result;
+}
+
 /* assorted pointer type arguments */
 static CURLcode setopt_pointers(struct Curl_easy *data, CURLoption option,
                                 va_list param)
@@ -1496,30 +1516,8 @@ static CURLcode setopt_pointers(struct Curl_easy *data, CURLoption option,
     if(!s->err)
       s->err = stderr;
     break;
-  case CURLOPT_SHARE: {
-    struct Curl_share *set = va_arg(param, struct Curl_share *);
-
-    /* disconnect from old share, if any and possible */
-    result = Curl_share_easy_unlink(data);
-    if(result)
-      return result;
-
-    /* use new share if it set */
-    if(GOOD_SHARE_HANDLE(set)) {
-      result = Curl_share_easy_link(data, set);
-      if(result)
-        return result;
-    }
-    break;
-  }
-
-#ifdef USE_HTTP2
-  case CURLOPT_STREAM_DEPENDS:
-  case CURLOPT_STREAM_DEPENDS_E:
-    /* not doing stream dependencies any longer, but accept options
-     * for backward compatibility */
-    break;
-#endif
+  case CURLOPT_SHARE:
+    return setopt_share(data, va_arg(param, struct Curl_share *));
 
   default:
     return CURLE_UNKNOWN_OPTION;
@@ -2056,7 +2054,7 @@ static CURLcode setopt_cptr_http_mqtt(struct Curl_easy *data,
      * If the encoding is set to "" we use an Accept-Encoding header that
      * encompasses all the encodings we support.
      * If the encoding is set to NULL we do not send an Accept-Encoding header
-     * and ignore an received Content-Encoding header.
+     * and ignore any received Content-Encoding header.
      *
      */
     if(ptr && !*ptr) {
@@ -2079,7 +2077,7 @@ static CURLcode setopt_cptr_http_mqtt(struct Curl_easy *data,
      */
     result = Curl_setstropt(&s->str[STRING_AWS_SIGV4], ptr);
     /*
-     * Basic been set by default it need to be unset here
+     * Basic has been set by default; it needs to be unset here.
      */
     if(s->str[STRING_AWS_SIGV4])
       s->httpauth = CURLAUTH_AWS_SIGV4;
@@ -2412,26 +2410,13 @@ static CURLcode setopt_cptr_misc(struct Curl_easy *data, CURLoption option,
     s->rtp_out = ptr;
     break;
 #endif /* !CURL_DISABLE_RTSP */
-#ifdef USE_TLS_SRP
   case CURLOPT_TLSAUTH_USERNAME:
-    return Curl_setstropt(&s->str[STRING_TLSAUTH_USERNAME], ptr);
   case CURLOPT_TLSAUTH_PASSWORD:
-    return Curl_setstropt(&s->str[STRING_TLSAUTH_PASSWORD], ptr);
   case CURLOPT_TLSAUTH_TYPE:
-    if(ptr && !curl_strequal(ptr, "SRP"))
-      result = CURLE_BAD_FUNCTION_ARGUMENT;
-    break;
-#ifndef CURL_DISABLE_PROXY
   case CURLOPT_PROXY_TLSAUTH_USERNAME:
-    return Curl_setstropt(&s->str[STRING_TLSAUTH_USERNAME_PROXY], ptr);
   case CURLOPT_PROXY_TLSAUTH_PASSWORD:
-    return Curl_setstropt(&s->str[STRING_TLSAUTH_PASSWORD_PROXY], ptr);
   case CURLOPT_PROXY_TLSAUTH_TYPE:
-    if(ptr && !curl_strequal(ptr, "SRP"))
-      result = CURLE_BAD_FUNCTION_ARGUMENT;
-    break;
-#endif
-#endif
+    return CURLE_NOT_BUILT_IN;
 #ifndef CURL_DISABLE_HSTS
   case CURLOPT_HSTSREADDATA:
     s->hsts_read_userp = ptr;
@@ -2906,10 +2891,11 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
     case CURLOPT_MIMEPOST:         /* curl_mime * */
     case CURLOPT_STDERR:           /* FILE * */
     case CURLOPT_SHARE:            /* CURLSH * */
-    case CURLOPT_STREAM_DEPENDS:   /* CURL * */
-    case CURLOPT_STREAM_DEPENDS_E: /* CURL * */
     case CURLOPT_CURLU:            /* CURLU * */
       return setopt_pointers(data, option, param);
+    case CURLOPT_STREAM_DEPENDS:   /* CURL * */
+    case CURLOPT_STREAM_DEPENDS_E: /* CURL * */
+      return CURLE_OK;
     default:
       break;
     }
@@ -2930,23 +2916,24 @@ CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
  * NOTE: This is one of few API functions that are allowed to be called from
  * within a callback.
  */
-
 #undef curl_easy_setopt
 CURLcode curl_easy_setopt(CURL *curl, CURLoption option, ...)
 {
-  va_list arg;
+  struct Curl_eapi_guard guard;
   CURLcode result;
-  struct Curl_easy *data = curl;
 
-  if(!data)
-    return CURLE_BAD_FUNCTION_ARGUMENT;
+  if(CURL_EAPI_ENTER(&guard, curl, easy_setopt, &result)) {
+    struct Curl_easy *data = curl;
+    va_list arg;
 
-  va_start(arg, option);
+    va_start(arg, option);
 
-  result = Curl_vsetopt(data, option, arg);
+    result = Curl_vsetopt(data, option, arg);
 
-  va_end(arg);
-  if(result == CURLE_BAD_FUNCTION_ARGUMENT)
-    failf(data, "setopt 0x%x got bad argument", (unsigned int)option);
+    va_end(arg);
+    if(result == CURLE_BAD_FUNCTION_ARGUMENT)
+      failf(data, "setopt 0x%x got bad argument", (unsigned int)option);
+  }
+  CURL_EAPI_LEAVE(&guard);
   return result;
 }

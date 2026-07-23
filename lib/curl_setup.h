@@ -490,10 +490,6 @@
 #  endif
 #endif
 
-#ifndef STDC_HEADERS /* no standard C headers! */
-#include <curl/stdcheaders.h>
-#endif
-
 #include <stdint.h>
 #define HAVE_UINTPTR_T  /* assume uintptr_t is provided by stdint.h */
 
@@ -957,7 +953,7 @@ struct timeval {
                                      (RECV_TYPE_ARG4)(0))
 #else /* HAVE_RECV */
 #ifndef sread
-#error "Missing definition of macro sread!"
+#error "Missing definition of macro sread"
 #endif
 #endif /* HAVE_RECV */
 
@@ -980,7 +976,7 @@ struct timeval {
 #endif /* SEND_NONCONST_ARG2 */
 #else /* HAVE_SEND */
 #ifndef swrite
-#error "Missing definition of macro swrite!"
+#error "Missing definition of macro swrite"
 #endif
 #endif /* HAVE_SEND */
 
@@ -1194,7 +1190,7 @@ typedef unsigned int curl_bit;
  */
 #if defined(__LWIP_OPT_H__) || defined(LWIP_HDR_OPT_H)
 #  if defined(SOCKET) || defined(USE_WINSOCK)
-#    error "Winsock and lwIP TCP/IP stack definitions shall not coexist!"
+#    error "Winsock and lwIP TCP/IP stack definitions shall not coexist"
 #  endif
 #endif
 
@@ -1581,7 +1577,7 @@ typedef struct sockaddr_un {
 #ifdef USE_OPENSSL
 /* OpenSSL 3 marks these functions deprecated but we have no replacements (yet)
    so tell the compiler to not warn for them:
-   - DES_* (for NTLM), SSL_CTX_set_srp_* (for TLS-SRP)
+   - DES_* (for NTLM)
    - EVP_PKEY_get1_RSA, MD5_*, RSA_flags, RSA_free (auto-skipped for OpenSSL
      built with no-deprecated) */
 #  define OPENSSL_SUPPRESS_DEPRECATED

@@ -40,6 +40,7 @@ from testenv import (
     Dante,
     Env,
     ExecResult,
+    H2oServer,
     Httpd,
     NghttpxQuic,
     RunProfile,
@@ -71,6 +72,8 @@ class Card:
     def fmt_mbs(cls, val):
         if val is None or val < 0:
             return '--'
+        if val >= (1024 * 1024 * 1024):
+            return f'{val / (1024 * 1024 * 1024):.3g} GB/s'
         if val >= (1024 * 1024):
             return f'{val / (1024 * 1024):.3g} MB/s'
         if val >= 1024:
@@ -774,16 +777,18 @@ def run_score(args, protocol):
             uploads = None
         requests = args.requests
 
-    test_httpd = protocol != 'h3'
-    test_caddy = protocol == 'h3'
-    if args.caddy or args.httpd:
-        test_caddy = args.caddy
-        test_httpd = args.httpd
-
     rv = 0
     env = Env()
     env.setup()
     env.test_timeout = None
+
+    test_httpd = protocol != 'h3'
+    test_h2o = protocol == 'h3' and env.have_h2o()
+    test_caddy = protocol == 'h3' and not test_h2o
+    if args.caddy or args.httpd or args.h2o:
+        test_caddy = args.caddy
+        test_httpd = args.httpd
+        test_h2o = args.h2o
 
     sockd = None
     socks_args = None
@@ -801,6 +806,7 @@ def run_score(args, protocol):
     httpd = None
     nghttpx = None
     caddy = None
+    h2o = None
     try:
         cards = []
 
@@ -854,6 +860,26 @@ def run_score(args, protocol):
                                socks_args=socks_args,
                                limit_rate=args.limit_rate,
                                http_plain=args.http_plain)
+            card.setup_resources(server_docs, downloads)
+            cards.append(card)
+
+        if test_h2o:
+            h2o = H2oServer(env=env)
+            h2o.clear_logs()
+            assert h2o.initial_start()
+            server_descr = f'H2o/{env.h2o_version()}'
+            server_port = h2o.port
+            server_docs = h2o.docs_dir
+            card = ScoreRunner(env=env,
+                               protocol=protocol,
+                               server_descr=server_descr,
+                               server_port=server_port,
+                               verbose=args.verbose, curl_verbose=args.curl_verbose,
+                               download_parallel=args.download_parallel,
+                               upload_parallel=args.upload_parallel,
+                               with_flame=args.flame,
+                               socks_args=socks_args,
+                               limit_rate=args.limit_rate)
             card.setup_resources(server_docs, downloads)
             cards.append(card)
 
@@ -919,6 +945,8 @@ def run_score(args, protocol):
             caddy.stop()
         if nghttpx:
             nghttpx.stop(wait_dead=False)
+        if h2o:
+            h2o.stop()
         if httpd:
             httpd.stop()
         if sockd:
@@ -949,6 +977,8 @@ def main():
                         default=1, help="how many sample runs to make")
     parser.add_argument("--httpd", action='store_true', default=False,
                         help="evaluate httpd server only")
+    parser.add_argument("--h2o", action='store_true', default=False,
+                        help="evaluate h2o server only")
     parser.add_argument("--caddy", action='store_true', default=False,
                         help="evaluate caddy server only")
     parser.add_argument("--curl-verbose", action='store_true',

@@ -117,9 +117,11 @@ struct async_thrdd_item {
   uint16_t port;
   uint8_t transport;
   uint8_t dns_queries;
+  BIT(negative); /* resolver answered that the name does not exist */
 #ifdef DEBUGBUILD
   uint32_t delay_ms;
   uint32_t delay_fail_ms;
+  BIT(dbg_negative);
 #endif
   char hostname[1];
 };
@@ -182,6 +184,8 @@ static struct async_thrdd_item *async_thrdd_item_create(
         item->delay_fail_ms = (uint32_t)l + c;
       }
     }
+    if(getenv("CURL_DBG_RESOLV_FAIL_NEGATIVE"))
+      item->dbg_negative = TRUE;
   }
 #endif
 
@@ -238,8 +242,7 @@ static CURLcode async_rr_start(struct Curl_easy *data,
   }
 #endif
 
-  memset(&thrdd->rr.hinfo, 0, sizeof(thrdd->rr.hinfo));
-  thrdd->rr.hinfo.rrname = rrname;
+  thrdd->rr.https_name = rrname;
   async->queries_ongoing++;
   ares_query_dnsrec(thrdd->rr.channel,
                     rrname ? rrname : async->hostname, ARES_CLASS_IN,
@@ -287,7 +290,8 @@ void Curl_async_thrdd_destroy(struct Curl_easy *data,
     ares_destroy(async->thrdd.rr.channel);
     async->thrdd.rr.channel = NULL;
   }
-  Curl_httpsrr_cleanup(&async->thrdd.rr.hinfo);
+  curlx_safefree(async->thrdd.rr.https_name);
+  Curl_httpsrr_destroy(async->thrdd.rr.hinfo);
 #endif
   async_thrdd_item_destroy(async->thrdd.res_A);
   async->thrdd.res_A = NULL;
@@ -331,6 +335,26 @@ CURLcode Curl_async_await(struct Curl_easy *data, uint32_t resolv_id,
 
 #ifdef HAVE_GETADDRINFO
 
+/* Was the getaddrinfo() failure an authoritative negative answer,
+   i.e. the resolver responded that the name (or its data) does not
+   exist? Transient failures like EAI_AGAIN and local troubles must
+   not count as negative answers. */
+static bool gai_negative(int rc)
+{
+  switch(rc) {
+#ifdef EAI_NONAME
+  case EAI_NONAME:
+#endif
+#if defined(EAI_NODATA) && \
+  (!defined(EAI_NONAME) || (EAI_NODATA != EAI_NONAME))
+  case EAI_NODATA:
+#endif
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+
 /* Process the item, using Curl_getaddrinfo_ex() */
 static void async_thrdd_item_process(void *arg)
 {
@@ -346,6 +370,7 @@ static void async_thrdd_item_process(void *arg)
   }
   if(item->delay_fail_ms) {
     curlx_wait_ms(item->delay_fail_ms);
+    item->negative = item->dbg_negative;
     return;
   }
 #endif
@@ -375,6 +400,7 @@ static void async_thrdd_item_process(void *arg)
     item->sockerr = SOCKERRNO ? SOCKERRNO : rc;
     if(item->sockerr == 0)
       item->sockerr = RESOLVER_ENOMEM;
+    item->negative = gai_negative(rc);
   }
   else {
     Curl_addrinfo_set_port(item->res, item->port);
@@ -394,6 +420,7 @@ static void async_thrdd_item_process(void *arg)
   }
   if(item->delay_fail_ms) {
     curlx_wait_ms(item->delay_fail_ms);
+    item->negative = item->dbg_negative;
     return;
   }
 #endif
@@ -402,12 +429,15 @@ static void async_thrdd_item_process(void *arg)
     item->sockerr = SOCKERRNO;
     if(item->sockerr == 0)
       item->sockerr = RESOLVER_ENOMEM;
+    /* this resolver cannot tell a transient failure from an
+       authoritative negative answer, treat it as before */
+    item->negative = TRUE;
   }
 }
 
 #endif /* HAVE_GETADDRINFO */
 
-#ifdef ENABLE_WAKEUP
+#ifdef ENABLE_INTERNAL_WAKEUP
 static void async_thrdd_event(const struct curl_thrdq *tqueue,
                               Curl_thrdq_event ev,
                               void *user_data)
@@ -416,7 +446,7 @@ static void async_thrdd_event(const struct curl_thrdq *tqueue,
   (void)tqueue;
   switch(ev) {
   case CURL_THRDQ_EV_ITEM_DONE:
-    (void)curl_multi_wakeup(multi);
+    Curl_multi_wakeup_internal(multi);
     break;
   default:
     break;
@@ -618,7 +648,7 @@ CURLcode Curl_async_getaddrinfo(struct Curl_easy *data,
     return result;
 
 #ifdef CURLRES_IPV6
-  /* Do not start an AAAA query for an ipv4 address when
+  /* Do not start an AAAA query for an IPv4 address when
    * we will start an A query for it. */
   if((async->dns_queries & CURL_DNSQ_AAAA) &&
      !(async->is_ipv4addr && (async->dns_queries & CURL_DNSQ_A))) {
@@ -638,6 +668,9 @@ CURLcode Curl_async_getaddrinfo(struct Curl_easy *data,
 #endif
 
 out:
+  if(!async->queries_ongoing)
+    async->done = TRUE;
+
   if(result)
     CURL_TRC_DNS(data, "error queueing query %s:%d -> %d",
                  async->hostname, async->port, (int)result);
@@ -663,7 +696,7 @@ CURLcode Curl_async_pollset(struct Curl_easy *data,
 #endif
 
   if(!async->done) {
-#ifndef ENABLE_WAKEUP
+#ifndef ENABLE_INTERNAL_WAKEUP
     timediff_t stutter_ms, elapsed_ms;
     elapsed_ms = curlx_ptimediff_ms(Curl_pgrs_now(data), &async->start);
     if(elapsed_ms < 3)
@@ -675,6 +708,15 @@ CURLcode Curl_async_pollset(struct Curl_easy *data,
     else
       stutter_ms = 200;
     timeout_ms = CURLMIN(stutter_ms, timeout_ms);
+#else
+    if(async->queries_ongoing &&
+       !Curl_thrdq_check_started(data->multi->resolv_thrdq)) {
+      /* The queue has items but starting a worker thread to process
+         them just failed again; expire soon to check once more,
+         instead of sleeping on the full resolve timeout. */
+      CURL_TRC_DNS(data, "resolver thread start failed again, retrying");
+      timeout_ms = CURLMIN(100, timeout_ms);
+    }
 #endif
     Curl_expire(data, timeout_ms, EXPIRE_ASYNC_NAME);
   }
@@ -706,7 +748,7 @@ CURLcode Curl_async_take_result(struct Curl_easy *data,
   if(thrdd->rr.channel)
     (void)Curl_ares_perform(thrdd->rr.channel, 0);
 #endif
-#ifndef ENABLE_WAKEUP
+#ifndef ENABLE_INTERNAL_WAKEUP
   Curl_async_thrdd_multi_process(data->multi);
 #endif
 
@@ -714,6 +756,24 @@ CURLcode Curl_async_take_result(struct Curl_easy *data,
     return CURLE_AGAIN;
 
   Curl_expire_done(data, EXPIRE_ASYNC_NAME);
+
+  /* A failure is an authoritative negative answer, eligible for
+     negative caching, only when every A/AAAA query performed came
+     back answering that the name does not exist. A query that
+     failed transiently or never returned is not an answer. */
+  {
+    const uint8_t ip_queries =
+      async->dns_queries & (CURL_DNSQ_A | CURL_DNSQ_AAAA);
+    bool negative = (async->dns_responses & ip_queries) == ip_queries;
+    if(thrdd->res_A && (thrdd->res_A->res || !thrdd->res_A->negative))
+      negative = FALSE;
+    if(thrdd->res_AAAA && (thrdd->res_AAAA->res || !thrdd->res_AAAA->negative))
+      negative = FALSE;
+    if(!thrdd->res_A && !thrdd->res_AAAA)
+      negative = FALSE;
+    async->negative_answer = negative;
+  }
+
   if(async->result) {
     result = async->result;
     goto out;
@@ -721,7 +781,7 @@ CURLcode Curl_async_take_result(struct Curl_easy *data,
 
   if((thrdd->res_A && thrdd->res_A->res) ||
      (thrdd->res_AAAA && thrdd->res_AAAA->res)) {
-    dns = Curl_dnscache_mk_entry2(
+    dns = Curl_dnsc_mk_addr2(
       data, async->dns_queries,
       thrdd->res_A ? &thrdd->res_A->res : NULL,
       thrdd->res_AAAA ? &thrdd->res_AAAA->res : NULL,
@@ -730,22 +790,19 @@ CURLcode Curl_async_take_result(struct Curl_easy *data,
       result = CURLE_OUT_OF_MEMORY;
       goto out;
     }
+  }
 
 #ifdef USE_HTTPSRR_ARES
-    if(thrdd->rr.channel) {
-      struct Curl_https_rrinfo *lhrr = NULL;
-      if(thrdd->rr.hinfo.complete) {
-        lhrr = Curl_httpsrr_dup_move(&thrdd->rr.hinfo);
-        if(!lhrr) {
-          result = CURLE_OUT_OF_MEMORY;
-          goto out;
-        }
-      }
-      Curl_httpsrr_trace(data, lhrr);
-      Curl_dns_entry_set_https_rr(dns, lhrr);
+  if(!dns && thrdd->rr.channel) {
+    Curl_httpsrr_trace(data, thrdd->rr.hinfo);
+    dns = Curl_dnsc_mk_https(data, &thrdd->rr.hinfo,
+                             async->hostname, async->port);
+    if(!dns) {
+      result = CURLE_OUT_OF_MEMORY;
+      goto out;
     }
-#endif
   }
+#endif
 
   if(dns) {
     *pdns = dns;
@@ -816,7 +873,7 @@ const struct Curl_https_rrinfo *Curl_async_get_https(
 {
 #ifdef USE_HTTPSRR_ARES
   if(Curl_async_knows_https(data, async))
-    return &async->thrdd.rr.hinfo;
+    return async->thrdd.rr.hinfo;
 #else
   (void)data;
   (void)async;
