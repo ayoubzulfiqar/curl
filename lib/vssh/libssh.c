@@ -45,7 +45,6 @@
 #include "urldata.h"
 #include "sendf.h"
 #include "curl_trc.h"
-#include "hostip.h"
 #include "progress.h"
 #include "transfer.h"
 #include "vssh/ssh.h"
@@ -2238,7 +2237,7 @@ static CURLcode myssh_in_SESSION_FREE(struct Curl_easy *data,
   /* the code we are about to return */
   result = sshc->actualcode;
   memset(sshc, 0, sizeof(struct ssh_conn));
-  connclose(data->conn, "SSH session free");
+  connclose(data->conn);
   sshc->state = SSH_SESSION_FREE;   /* current */
   sshc->nextstate = SSH_NO_STATE;
   myssh_to(data, sshc, SSH_STOP);

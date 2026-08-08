@@ -210,7 +210,7 @@ static CURLcode cw_download_write(struct Curl_easy *data,
 
   if(data->req.no_body && nbytes > 0) {
     /* BODY arrives although we want none, bail out */
-    streamclose(data->conn, "ignoring body");
+    streamclose(data->conn);
     CURL_TRC_WRITE(data, "download_write body(type=%x, blen=%zu), "
                    "did not want a BODY", (unsigned int)type, nbytes);
     data->req.download_done = TRUE;
@@ -277,7 +277,7 @@ static CURLcode cw_download_write(struct Curl_easy *data,
             ", bytecount = %" FMT_OFF_T,
             excess_len, data->req.size, data->req.maxdownload,
             data->req.bytecount);
-      connclose(data->conn, "excess found in a read");
+      connclose(data->conn);
     }
   }
   else if((nwrite < nbytes) && !data->req.ignorebody) {
@@ -293,6 +293,7 @@ static CURLcode cw_download_write(struct Curl_easy *data,
 static const struct Curl_cwtype cw_download = {
   "protocol",
   NULL,
+  0,
   Curl_cwriter_def_init,
   cw_download_write,
   Curl_cwriter_def_flush,
@@ -315,6 +316,7 @@ static CURLcode cw_raw_write(struct Curl_easy *data,
 static const struct Curl_cwtype cw_raw = {
   "raw",
   NULL,
+  0,
   Curl_cwriter_def_init,
   cw_raw_write,
   Curl_cwriter_def_flush,
@@ -484,9 +486,9 @@ CURLcode Curl_cwriter_add(struct Curl_easy *data,
       return result;
   }
 
-  if(writer->phase == CURL_CW_CONTENT_DECODE) {
-    /* On adding a content decoder, add the pause writer. Do this
-     * BEFORE the given writer as any failure will make the
+  if(writer->cwt->flags & CURL_CW_FLAG_BLOWUP) {
+    /* On adding a writer that may blow up write sizes, e.g. zip bombs,
+     * add the pause writer. Do this first as any failure will make the
      * caller destroy the writer again. */
     result = cwriter_ensure_pause_writer(data);
     if(result)
@@ -1126,7 +1128,7 @@ static CURLcode do_init_reader_stack(struct Curl_easy *data,
 
   data->req.reader.stack = r;
   clen = r->crt->total_length(data, r);
-  /* if we do not have 0 length init, and crlf conversion is wanted,
+  /* if we do not have 0 length init, and CRLF conversion is wanted,
    * add the reader for it */
   if(clen && (data->set.crlf
 #ifdef CURL_PREFER_LF_LINEENDS

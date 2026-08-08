@@ -54,13 +54,11 @@
 #include "curlx/timeval.h"
 
 #include "api.h"
-#include "asyn.h"
 #include "cookie.h"
 #include "creds.h"
 #include "psl.h"
 #include "formdata.h"
 #include "http_chunks.h" /* for the structs and enum stuff */
-#include "hostip.h"
 #include "hash.h"
 #include "peer.h"
 #include "proxy.h"
@@ -71,6 +69,8 @@
 #include "request.h"
 #include "ratelimit.h"
 #include "netrc.h"
+#include "vdns/asyn.h"
+#include "vdns/hostip.h"
 #include "vtls/vtls_config.h"
 
 /* On error return, the value of `pnwritten` has no meaning */
@@ -477,22 +477,6 @@ struct Progress {
   BIT(is_t_startransfer_set);
 };
 
-typedef enum {
-  RTSPREQ_NONE, /* first in list */
-  RTSPREQ_OPTIONS,
-  RTSPREQ_DESCRIBE,
-  RTSPREQ_ANNOUNCE,
-  RTSPREQ_SETUP,
-  RTSPREQ_PLAY,
-  RTSPREQ_PAUSE,
-  RTSPREQ_TEARDOWN,
-  RTSPREQ_GET_PARAMETER,
-  RTSPREQ_SET_PARAMETER,
-  RTSPREQ_RECORD,
-  RTSPREQ_RECEIVE,
-  RTSPREQ_LAST /* last in list */
-} Curl_RtspReq;
-
 struct auth {
   uint32_t want;  /* Bitmask set to the authentication methods wanted by app
                      (with CURLOPT_HTTPAUTH or CURLOPT_PROXYAUTH). */
@@ -525,9 +509,6 @@ typedef enum {
   EXPIRE_100_TIMEOUT,
   EXPIRE_ASYNC_NAME,
   EXPIRE_CONNECTTIMEOUT,
-  EXPIRE_DNS_PER_NAME, /* family1 */
-  EXPIRE_DNS_PER_NAME2, /* family2 */
-  EXPIRE_HAPPY_EYEBALLS_DNS, /* See asyn-ares.c */
   EXPIRE_HAPPY_EYEBALLS,
   EXPIRE_MULTI_PENDING,
   EXPIRE_SPEEDCHECK,
@@ -706,9 +687,9 @@ struct UrlState {
                             417 response */
   BIT(use_range);
   BIT(rangestringalloc); /* the range string is malloc()'ed */
-  BIT(done); /* set to FALSE when Curl_init_do() is called and set to TRUE
-                when multi_done() is called, to prevent multi_done() to get
-                invoked twice when the multi interface is used. */
+  BIT(done); /* set to FALSE when Curl_init_transfer() is called and set to
+                TRUE when multi_done() is called, to prevent multi_done() from
+                being invoked twice. */
 #ifndef CURL_DISABLE_COOKIES
   BIT(cookie_engine);
 #endif
@@ -849,6 +830,11 @@ enum dupstring {
 #ifndef CURL_DISABLE_AWS
   STRING_AWS_SIGV4, /* Parameters for V4 signature */
 #endif
+#ifndef CURL_DISABLE_HTTPSIG
+  STRING_HTTPSIG_KEY,    /* hex-encoded key data */
+  STRING_HTTPSIG_KEYID,  /* key identifier */
+  STRING_HTTPSIG_HEADERS, /* space-separated components to sign */
+#endif
 #ifndef CURL_DISABLE_PROXY
   STRING_HAPROXY_CLIENT_IP,     /* CURLOPT_HAPROXY_CLIENT_IP */
 #endif
@@ -890,6 +876,7 @@ struct UserDefined {
   void *writeheader; /* write the header to this if non-NULL */
   uint32_t httpauth;  /* kind of HTTP authentication to use (bitmask) */
   uint32_t proxyauth; /* kind of proxy authentication to use (bitmask) */
+  uint8_t httpsig_algorithm; /* CURLHTTPSIG_* algorithm for RFC 9421 */
   void *postfields;  /* if POST, set the fields' values here */
   curl_seek_callback seek_func;      /* function that seeks the input */
   curl_off_t postfieldsize; /* if POST, this might have a size to use instead
@@ -999,7 +986,7 @@ struct UserDefined {
 #ifndef CURL_DISABLE_RTSP
   void *rtp_out;     /* write RTP to this if non-NULL */
   /* Common RTSP header options */
-  Curl_RtspReq rtspreq; /* RTSP request type */
+  unsigned char rtspreq; /* RTSP request type */
 #endif
 #ifndef CURL_DISABLE_FTP
   curl_chunk_bgn_callback chunk_bgn; /* called before part of transfer
@@ -1062,7 +1049,7 @@ struct UserDefined {
   /* Despite the name, ftp_create_missing_dirs is for FTP(S) and SFTP
      1 - create directories that do not exist
      2 - the same but also allow MKD to fail once
-  */
+   */
   uint8_t ftp_create_missing_dirs;
 #endif
   uint8_t use_ssl;   /* if AUTH TLS is to be attempted etc, for FTP or IMAP or
@@ -1192,10 +1179,10 @@ struct UserDefined {
 #define IS_MIME_POST(a) FALSE
 #endif
 
-/* callback that gets called when a sub easy (data->master_mid set) is
-   DONE. Called on the master easy. */
-typedef void multi_sub_xfer_done_cb(struct Curl_easy *master_easy,
-                                    struct Curl_easy *sub_easy,
+/* callback that gets called when the transfer `data` is done and
+ * `data->master_mid` is set to an existing easy handle. */
+typedef void multi_sub_xfer_done_cb(struct Curl_easy *data,
+                                    struct Curl_easy *master,
                                     CURLcode result);
 
 /*
