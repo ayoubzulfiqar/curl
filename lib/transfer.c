@@ -56,10 +56,8 @@
 
 #include "urldata.h"
 
-#include "hostip.h"
 #include "cfilters.h"
 #include "cw-out.h"
-#include "dnscache.h"
 #include "transfer.h"
 #include "sendf.h"
 #include "curl_trc.h"
@@ -73,6 +71,7 @@
 #include "setopt.h"
 #include "headers.h"
 #include "bufref.h"
+#include "rtsp.h"
 
 #if !defined(CURL_DISABLE_HTTP) || !defined(CURL_DISABLE_SMTP) || \
   !defined(CURL_DISABLE_IMAP)
@@ -526,7 +525,9 @@ CURLcode Curl_pretransfer(struct Curl_easy *data)
     data->state.infilesize = 0;
 
   /* If there is a list of cookie files to read, do it now! */
-  result = Curl_cookie_loadfiles(data);
+  result = Curl_cookie_loadfiles(data,
+                                 data->set.cookiesession ?
+                                 COOKIE_NOSESSION : 0);
   if(!result)
     Curl_cookie_run(data); /* activate */
 
@@ -658,7 +659,7 @@ CURLcode Curl_retry_request(struct Curl_easy *data, char **url)
     if(!*url)
       return CURLE_OUT_OF_MEMORY;
 
-    connclose(conn, "retry"); /* close this connection */
+    connclose(conn); /* close this connection */
     conn->bits.retry = TRUE; /* mark this as a connection we are about to
                                 retry. Marking it this way should prevent i.e
                                 HTTP transfers to return error because nothing

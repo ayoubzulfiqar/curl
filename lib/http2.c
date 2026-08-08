@@ -46,6 +46,7 @@
 #include "bufref.h"
 #include "curlx/dynbuf.h"
 #include "headers.h"
+#include "curl_share.h"
 
 #if NGHTTP2_VERSION_NUM < 0x010f00
 #error "nghttp2 1.15.0 or greater required"
@@ -512,7 +513,8 @@ static CURLcode h2_process_pending_input(struct Curl_cfilter *cf,
        the connection may not be reused. This is set when a
        GOAWAY frame has been received or when the limit of stream
        identifiers has been reached. */
-    connclose(cf->conn, "http/2: No new requests allowed");
+    CURL_TRC_M(data, "http/2: No new requests allowed");
+    connclose(cf->conn);
   }
 
   return CURLE_OK;
@@ -544,9 +546,9 @@ static bool http2_connisalive(struct Curl_cfilter *cf, struct Curl_easy *data,
 
     *input_pending = FALSE;
     result = Curl_cf_recv_bufq(cf->next, data, &ctx->inbufq, 0, &nread);
+    CURL_TRC_CF(data, cf, "connisalive, recv pending input -> %d, %zu",
+                (int)result, nread);
     if(!result) {
-      CURL_TRC_CF(data, cf, "%zu bytes stray data read before trying "
-                  "h2 connection", nread);
       result = h2_process_pending_input(cf, data);
       if(result)
         /* immediate error, considered dead */
@@ -703,6 +705,8 @@ static struct Curl_easy *h2_duphandle(struct Curl_cfilter *cf,
     struct h2_stream_ctx *second_stream;
     http2_data_setup(cf, second, &second_stream);
     second->state.priority.weight = data->state.priority.weight;
+    if(data->share)
+      (void)Curl_share_easy_link(second, data->share);
   }
   return second;
 }
@@ -1426,7 +1430,7 @@ static int on_header(nghttp2_session *session, const nghttp2_frame *frame,
   if(frame->hd.type == NGHTTP2_PUSH_PROMISE) {
     char *h;
 
-    if((namelen == (sizeof(HTTP_PSEUDO_AUTHORITY) - 1)) &&
+    if((namelen == CURL_CSTRLEN(HTTP_PSEUDO_AUTHORITY)) &&
        !strncmp(HTTP_PSEUDO_AUTHORITY, (const char *)name, namelen)) {
       /* pseudo headers are lower case */
       int rc = 0;
@@ -1502,7 +1506,7 @@ static int on_header(nghttp2_session *session, const nghttp2_frame *frame,
     return 0;
   }
 
-  if(namelen == sizeof(HTTP_PSEUDO_STATUS) - 1 &&
+  if(namelen == CURL_CSTRLEN(HTTP_PSEUDO_STATUS) &&
      !memcmp(HTTP_PSEUDO_STATUS, name, namelen)) {
     /* nghttp2 guarantees :status is received first and only once. */
     char buffer[32];
@@ -1688,7 +1692,7 @@ static CURLcode http2_handle_stream_close(struct Curl_cfilter *cf,
     if(stream->error == NGHTTP2_REFUSED_STREAM) {
       infof(data, "HTTP/2 stream %d refused by server, try again on a new "
                   "connection", stream->id);
-      connclose(cf->conn, "REFUSED_STREAM"); /* do not use this anymore */
+      connclose(cf->conn); /* do not use this anymore */
       data->state.refused_stream = TRUE;
       return CURLE_RECV_ERROR; /* trigger Curl_retry_request() later */
     }
@@ -1930,8 +1934,9 @@ static CURLcode h2_progress_ingress(struct Curl_cfilter *cf,
   }
 
   if(ctx->conn_closed && Curl_bufq_is_empty(&ctx->inbufq)) {
-    connclose(cf->conn, ctx->rcvd_goaway ? "server closed with GOAWAY" :
-              "server closed abruptly");
+    CURL_TRC_CF(data, cf, "server closed %s",
+                ctx->rcvd_goaway ? "with GOAWAY" : "abruptly");
+    connclose(cf->conn);
   }
 
   CURL_TRC_CF(data, cf, "[0] ingress: done");
@@ -2410,7 +2415,9 @@ static CURLcode cf_h2_ctx_open(struct Curl_cfilter *cf,
     failf(data, "Could not initialize nghttp2");
     goto out;
   }
-  ctx->max_concurrent_streams = DEFAULT_MAX_CONCURRENT_STREAMS;
+  ctx->max_concurrent_streams = data->multi ?
+    Curl_multi_max_concurrent_streams(data->multi) :
+    DEFAULT_MAX_CONCURRENT_STREAMS;
 
   if(ctx->via_h1_upgrade) {
     /* HTTP/1.1 Upgrade issued. H2 Settings have already been submitted
