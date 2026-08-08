@@ -89,6 +89,7 @@ TESTS_C = \
   lib766.c \
   lib1156.c \
   lib1301.c                                                   lib1308.c \
+  lib1396.c           lib1398.c \
   lib1485.c \
   lib1500.c lib1501.c lib1502.c                               lib1506.c \
   lib1507.c lib1508.c lib1509.c lib1510.c lib1511.c lib1512.c lib1513.c \
@@ -124,4 +125,5 @@ TESTS_C = \
   lib2700.c \
   lib3010.c lib3025.c lib3026.c lib3027.c lib3033.c lib3034.c \
   lib3100.c lib3101.c lib3102.c lib3103.c lib3104.c lib3105.c \
-  lib3207.c lib3208.c
+  lib3207.c lib3208.c \
+  lib5000.c lib5004.c

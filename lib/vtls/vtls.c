@@ -36,17 +36,12 @@
 
    "SSL/TLS Strong Encryption: An Introduction"
    https://httpd.apache.org/docs/2.0/ssl/ssl_intro.html
-*/
+ */
 
 #include "curl_setup.h"
 
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-
 #include "urldata.h"
 #include "cfilters.h"
-#include "cf-dns.h"
 
 #include "vtls/vtls.h" /* generic SSL protos etc */
 #include "vtls/vtls_int.h"
@@ -72,6 +67,7 @@
 #include "connect.h"
 #include "select.h"
 #include "setopt.h"
+#include "vdns/cf-dns.h"
 #include "curlx/strdup.h"
 #include "curlx/strcopy.h"
 
@@ -487,8 +483,8 @@ CURLcode Curl_pin_peer_pubkey(struct Curl_easy *data,
 
     pinned_hash = pinnedpubkey;
     while(pinned_hash &&
-          !strncmp(pinned_hash, "sha256//", (sizeof("sha256//") - 1))) {
-      pinned_hash = pinned_hash + (sizeof("sha256//") - 1);
+          !strncmp(pinned_hash, "sha256//", CURL_CSTRLEN("sha256//"))) {
+      pinned_hash = pinned_hash + CURL_CSTRLEN("sha256//");
       end_pos = strchr(pinned_hash, ';');
       pinned_hash_len = end_pos ?
                         (size_t)(end_pos - pinned_hash) : strlen(pinned_hash);
