@@ -46,12 +46,12 @@
 #include "urldata.h"
 #include "api.h"
 #include "transfer.h"
+#include "vdns/hostip.h"
 #include "vtls/vtls.h"
 #include "vtls/vtls_scache.h"
 #include "vquic/vquic.h"
 #include "url.h"
 #include "getinfo.h"
-#include "hostip.h"
 #include "curlx/strdup.h"
 #include "easyif.h"
 #include "multiif.h"
@@ -758,13 +758,9 @@ static CURLcode easy_perform(struct Curl_easy *data, bool events)
   /* if the handle has a connection still attached (it is/was a connect-only
      handle) then disconnect before performing */
   if(data->conn) {
-    struct connectdata *c;
-    curl_socket_t s;
+    struct connectdata *conn = data->conn;
     Curl_detach_connection(data);
-    s = Curl_getconnectinfo(data, &c);
-    if((s != CURL_SOCKET_BAD) && c) {
-      Curl_conn_terminate(data, c, TRUE);
-    }
+    Curl_conn_terminate(data, conn, TRUE);
     DEBUGASSERT(!data->conn);
   }
 
